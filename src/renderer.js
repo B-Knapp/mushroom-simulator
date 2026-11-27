@@ -84,7 +84,7 @@ export class Renderer {
       ctx.fillRect(0, 0, WORLD_W, WORLD_H);
     }
 
-    this.network.draw(ctx, cam, this.resourceView, now, dpr, state ? state.speed : 0, night);
+    this.network.draw(ctx, cam, this.resourceView, now, dpr, state ? state.speed : 0, night, state);
 
     if (state && state.raining) this.drawRain(state, now);
 

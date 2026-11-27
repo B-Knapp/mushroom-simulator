@@ -136,7 +136,7 @@ function formatClock(s) {
 worker.onmessage = (e) => {
   const d = e.data;
   if (d.seed !== seed) return; // stale message from a previous world
-  if (d.type === 'state') state = d;
+  if (d.type === 'state') { state = d; state.recvT = performance.now(); }
   else if (d.type === 'world') {
     loadAssets().then((assets) => {
       if (d.seed === seed) renderer.setWorld(d, bakeWorld(d, assets));

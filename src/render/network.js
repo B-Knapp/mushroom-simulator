@@ -11,9 +11,15 @@
 // Cords are cached in a screen-sized image (redrawn when the camera moves
 // or, at a limited rate, when the network changes). Tips, fans and glow are
 // drawn live every frame.
+//
+// Smooth growth: every cord carries the sim time it started and finished
+// growing. The view runs its own display clock a moment behind the
+// simulation and replays growth against it, so cords extend continuously
+// instead of appearing a segment at a time. Cords finished since the last
+// cache are drawn live until the next one.
 
 const SEG = 6;
-const TIP_STRIDE = 7; // x, y, angle, progress, rate, idle, id
+const TIP_STRIDE = 8; // x, y, angle, progress, rate, idle, id, segment start
 const BUCKETS = [
   { maxD: 0.75, w: 0.32, a: 0.42 },
   { maxD: 0.95, w: 0.44, a: 0.5 },
@@ -53,7 +59,15 @@ export class NetworkView {
     this.flowPaths = null;
     this.motes = null;
     this.cacheKey = '';
+    this.cacheCam = null;
+    this.cacheSimT = -Infinity;
+    this.simT = undefined;
+    this.fronts = null;
+    this.stemLen = null;
     this.dirty = true;
+    // Nothing from the previous world may linger in the glow.
+    this.routeGlow.width = 0;
+    this.glow.getContext('2d').clearRect(0, 0, this.glow.width, this.glow.height);
   }
 
   set(snap, now) {
@@ -105,17 +119,21 @@ export class NetworkView {
     this.edgeCount = n;
     this.flowPaths = qTop > 0 ? flowPaths : null;
     this.motes = motes;
+    this.t0 = snap.edgeT0;
+    this.t1 = snap.edgeT1;
+    this.owner = snap.edgeOwner;
+    this.snapMinute = snap.minute;
     this.tips = snap.tips;
-    this.tipTime = now;
     this.spore = snap.spore;
     this.dirty = true;
   }
 
   // night: 0 (midday) .. 1 (night). resourceView: the analytic glow view.
-  draw(ctx, cam, resourceView, now, dpr, speed, night) {
+  draw(ctx, cam, resourceView, now, dpr, speed, night, state) {
     const dt = this.lastNow ? Math.min(0.1, (now - this.lastNow) / 1000) : 0;
     this.lastNow = now;
     this.phase += dt * (speed > 0 ? 0.35 * Math.pow(speed, 0.3) : 0.05);
+    this.tickClock(state, now, dt, speed);
 
     if (this.edgeCount > 0) {
       const W = ctx.canvas.width, H = ctx.canvas.height;
@@ -127,7 +145,8 @@ export class NetworkView {
       const every = Math.min(1200, Math.max(CACHE_MS, this.edgeCount / 15));
       const stale = key !== this.cacheKey;
       const needs = !this.cacheCam || this.cacheView !== resourceView || this.cache.width !== W || this.cache.height !== H ||
-        (stale && !moving) || (!stale && this.dirty && now - (this.cacheT || 0) > every);
+        (stale && !moving) || (!stale && this.dirty && now - (this.cacheT || 0) > every) ||
+        (!moving && this.liveCount > 2500 && now - (this.cacheT || 0) > CACHE_MS * 3);
       if (needs) {
         this.renderCache(cam, resourceView, dpr, W, H);
         this.cacheKey = key;
@@ -148,13 +167,121 @@ export class NetworkView {
       ctx.restore();
     }
 
-    if (!resourceView) this.drawFans(ctx, cam, now, speed);
-    else this.drawTipLines(ctx, cam, now, speed);
+    this.drawLive(ctx, cam, resourceView);
+    this.placeTips();
+    if (!resourceView) this.drawFans(ctx, cam);
+    else this.drawTipLines(ctx, cam);
 
     // Slider 0..1 maps to 0..1.5; by day the glow is about half its night strength.
     const G = resourceView ? 0 : this.glowSetting * 1.5 * (0.5 + 0.5 * night);
     if (G > 0.01 && (this.edgeCount > 0 || this.tips)) this.drawGlow(ctx, cam, dpr, now, speed, G);
     this.drawSpore(ctx, cam.zoom, now);
+  }
+
+  // --- Display clock ----------------------------------------------------------------
+
+  // Follows the simulation clock smoothly, a little behind it (so the
+  // geometry it shows has always arrived), never running backwards.
+  tickClock(state, now, dt, speed) {
+    if (!state) return;
+    const rate = speed > 0 ? (state.actualRate > 0 ? state.actualRate : speed) : 0;
+    const r = rate * 60; // sim minutes per real second
+    const recv = state.recvT || now;
+    const est = state.minute + Math.min(0.4, (now - recv) / 1000) * r;
+    const target = speed > 0 ? est - 0.15 * r : state.minute;
+    if (this.simT === undefined || Math.abs(target - this.simT) > Math.max(240, 2 * r)) {
+      this.simT = target;
+      return;
+    }
+    const next = this.simT + r * dt + (target - this.simT) * Math.min(1, 1.5 * dt);
+    this.simT = Math.max(this.simT, next);
+  }
+
+  // Cords not yet in the cache: grown since, or still growing (drawn part
+  // way along). Also records where each tip's growing cord has reached.
+  drawLive(ctx, cam, glowView) {
+    this.fronts = new Map();
+    this.liveCount = 0;
+    if (!this.edgeCount || this.simT === undefined) return;
+    const T = this.simT, C = this.cacheSimT;
+    const t0 = this.t0, t1 = this.t1, sg = this.segs, bk = this.bucket, own = this.owner;
+    const z = cam.zoom;
+    const x0 = cam.x - 16, y0 = cam.y - 16, x1 = cam.x + cam.vw / z + 16, y1 = cam.y + cam.vh / z + 16;
+    let paths = null;
+    for (let e = 0; e < this.edgeCount; e++) {
+      if (t1[e] <= C || t0[e] >= T) continue;
+      this.liveCount++;
+      const ax = sg[e * 4], ay = sg[e * 4 + 1];
+      let bx = sg[e * 4 + 2], by = sg[e * 4 + 3];
+      if (t1[e] > T) {
+        const u = t1[e] > t0[e] ? (T - t0[e]) / (t1[e] - t0[e]) : 1;
+        bx = ax + (bx - ax) * u; by = ay + (by - ay) * u;
+        if (own[e] > 0) this.fronts.set(own[e], [bx, by, Math.atan2(sg[e * 4 + 3] - ay, sg[e * 4 + 2] - ax)]);
+      }
+      if ((ax < x0 && bx < x0) || (ax > x1 && bx > x1) || (ay < y0 && by < y0) || (ay > y1 && by > y1)) continue;
+      if (!paths) paths = BUCKETS.map(() => null);
+      const p = paths[bk[e]] || (paths[bk[e]] = new Path2D());
+      p.moveTo(ax, ay);
+      p.lineTo(bx, by);
+    }
+    if (!paths) return;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    for (let k = 0; k < BUCKETS.length; k++) {
+      if (!paths[k]) continue;
+      const b = BUCKETS[k];
+      if (glowView) {
+        ctx.globalCompositeOperation = 'lighter';
+        ctx.strokeStyle = `rgba(150,255,225,${b.a})`;
+        ctx.lineWidth = Math.max(b.w, (0.4 + 0.08 * k) / z);
+        ctx.stroke(paths[k]);
+        ctx.globalCompositeOperation = 'source-over';
+        continue;
+      }
+      // A light stand-in for the haze, then the cord.
+      ctx.strokeStyle = 'rgba(245,240,230,0.08)';
+      ctx.lineWidth = b.w * 3.2 + 2.5;
+      ctx.stroke(paths[k]);
+      ctx.strokeStyle = `rgba(248,244,236,${b.a})`;
+      ctx.lineWidth = Math.max(b.w * 0.85, (0.4 + 0.07 * k) / z);
+      ctx.stroke(paths[k]);
+    }
+  }
+
+  // Where each tip is at the display time: stem start and end, heading,
+  // and whether to draw it. Stride 7: sx, sy, ex, ey, ang, show (0 none,
+  // 1 stem + fan, 2 fan only), idle.
+  placeTips() {
+    const t = this.tips;
+    if (!t || !t.length || this.simT === undefined) { this.placed = null; return; }
+    const n = t.length / TIP_STRIDE;
+    const out = this.placed && this.placed.length === n * 7 ? this.placed : new Float32Array(n * 7);
+    const T = this.simT, M = this.snapMinute;
+    // Last drawn length per tip, so a stem never shrinks within a segment
+    // when a tip slows down between snapshots.
+    const prev = this.stemLen || new Map(), cur = new Map();
+    for (let k = 0, i = 0; i < t.length; i += TIP_STRIDE, k += 7) {
+      const x = t[i], y = t[i + 1], ang = t[i + 2], acc = t[i + 3], rate = t[i + 4], s = t[i + 7];
+      out[k + 6] = t[i + 5];
+      if (T < s) {
+        // This tip's newest segment hasn't started yet on screen: its front is
+        // still on a cord that's being drawn.
+        const f = this.fronts.get(t[i + 6]);
+        if (f) { out[k] = out[k + 2] = f[0]; out[k + 1] = out[k + 3] = f[1]; out[k + 4] = f[2]; out[k + 5] = 2; }
+        else out[k + 5] = 0;
+        continue;
+      }
+      let ext = T <= M ? (M > s ? acc * (T - s) / (M - s) : 0) : acc + rate * (T - M) / 60;
+      ext = Math.max(0, Math.min(SEG, ext));
+      const pv = prev.get(t[i + 6]);
+      if (pv && pv[0] === s && pv[1] > ext) ext = pv[1];
+      cur.set(t[i + 6], [s, ext]);
+      out[k] = x; out[k + 1] = y;
+      out[k + 2] = x + Math.cos(ang) * ext; out[k + 3] = y + Math.sin(ang) * ext;
+      out[k + 4] = ang; out[k + 5] = 1;
+    }
+    this.placed = out;
+    this.stemLen = cur;
   }
 
   // --- Cached cords ---------------------------------------------------------------
@@ -175,7 +302,12 @@ export class NetworkView {
     const x1 = cam.x + cam.vw / cam.zoom + m, y1 = cam.y + cam.vh / cam.zoom + m;
     const paths = BUCKETS.map(() => new Path2D());
     const sg = this.segs, bk = this.bucket;
+    // Only cords finished by the display time; newer ones are drawn live.
+    const T = this.simT === undefined ? Infinity : this.simT;
+    this.cacheSimT = T;
+    const t1 = this.t1;
     for (let e = 0; e < this.edgeCount; e++) {
+      if (t1 && t1[e] > T) continue;
       const ax = sg[e * 4], ay = sg[e * 4 + 1], bx = sg[e * 4 + 2], by = sg[e * 4 + 3];
       if ((ax < x0 && bx < x0) || (ax > x1 && bx > x1) || (ay < y0 && by < y0) || (ay > y1 && by > y1)) continue;
       const p = paths[bk[e]];
@@ -277,36 +409,31 @@ export class NetworkView {
 
   // --- Growing tips -------------------------------------------------------------------
 
-  // Each growing tip: the cord extends smoothly between snapshots and ends in
-  // a feathery fan of fine hyphae.
-  drawFans(ctx, cam, now, speed) {
-    const t = this.tips;
-    if (!t || !t.length) return;
+  // Each growing tip: the cord extends smoothly and ends in a feathery fan
+  // of fine hyphae.
+  drawFans(ctx, cam) {
+    const t = this.tips, P = this.placed;
+    if (!t || !P) return;
     const z = cam.zoom;
-    const simHours = ((now - this.tipTime) / 1000) * speed;
     const vx0 = cam.x - 20, vy0 = cam.y - 20, vx1 = cam.x + cam.vw / z + 20, vy1 = cam.y + cam.vh / z + 20;
     const stem = new Path2D();
     const fans = [new Path2D(), new Path2D()];
-    for (let i = 0; i < t.length; i += TIP_STRIDE) {
-      const x = t[i], y = t[i + 1];
-      if (x < vx0 || x > vx1 || y < vy0 || y > vy1) continue;
-      const ang = t[i + 2];
-      const ext = Math.min(SEG, t[i + 3] + t[i + 4] * simHours);
-      const c = Math.cos(ang), s = Math.sin(ang);
-      const ex = x + c * ext, ey = y + s * ext;
-      stem.moveTo(x, y);
-      stem.lineTo(ex, ey);
-      if (t[i + 5]) continue; // long-idle tips keep their stem but lose the fan
-      // Fan of fine hyphae, the same shape for a tip from frame to frame.
+    for (let k = 0, i = 0; k < P.length; k += 7, i += TIP_STRIDE) {
+      const show = P[k + 5];
+      if (!show) continue;
+      const ex = P[k + 2], ey = P[k + 3], ang = P[k + 4];
+      if (ex < vx0 || ex > vx1 || ey < vy0 || ey > vy1) continue;
+      if (show === 1) { stem.moveTo(P[k], P[k + 1]); stem.lineTo(ex, ey); }
+      if (P[k + 6]) continue; // long-idle tips keep their stem but lose the fan
       // Fan shape follows the tip, so it doesn't reshuffle as the tip grows.
       let h = Math.imul(t[i + 6] + 1, 0x9e3779b1) >>> 0;
-      for (let k = 0; k < 11; k++) {
+      for (let f = 0; f < 11; f++) {
         h = Math.imul(h ^ (h >>> 13), 0x5bd1e995) >>> 0;
         const spread = ((h & 1023) / 1023 - 0.5) * 1.7;
         const len = 4 + ((h >>> 10) & 63) / 63 * 7;
         const bend = (((h >>> 16) & 255) / 255 - 0.5) * 0.6;
         const a1 = ang + spread, a2 = a1 + bend;
-        const p = fans[k & 1];
+        const p = fans[f & 1];
         p.moveTo(ex, ey);
         p.quadraticCurveTo(ex + Math.cos(a1) * len * 0.55, ey + Math.sin(a1) * len * 0.55,
           ex + Math.cos(a2) * len, ey + Math.sin(a2) * len);
@@ -324,15 +451,14 @@ export class NetworkView {
   }
 
   // Resource view: tips simply extend as thin lines.
-  drawTipLines(ctx, cam, now, speed) {
-    const t = this.tips;
-    if (!t || !t.length) return;
-    const simHours = ((now - this.tipTime) / 1000) * speed;
+  drawTipLines(ctx, cam) {
+    const P = this.placed;
+    if (!P) return;
     const p = new Path2D();
-    for (let i = 0; i < t.length; i += TIP_STRIDE) {
-      const ext = Math.min(SEG, t[i + 3] + t[i + 4] * simHours);
-      p.moveTo(t[i], t[i + 1]);
-      p.lineTo(t[i] + Math.cos(t[i + 2]) * ext, t[i + 1] + Math.sin(t[i + 2]) * ext);
+    for (let k = 0; k < P.length; k += 7) {
+      if (P[k + 5] !== 1) continue;
+      p.moveTo(P[k], P[k + 1]);
+      p.lineTo(P[k + 2], P[k + 3]);
     }
     ctx.strokeStyle = 'rgba(150,255,225,0.6)';
     ctx.lineWidth = Math.max(0.35, 0.6 / cam.zoom);
@@ -383,12 +509,12 @@ export class NetworkView {
     }
 
     // Soft halo around each growing front.
-    const t = this.tips;
-    if (t && t.length) {
+    const P = this.placed;
+    if (P) {
       const R = Math.max(7, 3 * px);
-      for (let i = 0; i < t.length; i += TIP_STRIDE) {
-        if (t[i + 5]) continue;
-        const x = t[i], y = t[i + 1];
+      for (let k = 0; k < P.length; k += 7) {
+        if (!P[k + 5] || P[k + 6]) continue;
+        const x = P[k + 2], y = P[k + 3];
         if (x < vx0 || x > vx1 || y < vy0 || y > vy1) continue;
         c.globalAlpha = Math.min(1, G * (0.65 + 0.35 * Math.sin(now / 700 + x * 0.05)));
         c.drawImage(this.sprite, x - R, y - R, R * 2, R * 2);

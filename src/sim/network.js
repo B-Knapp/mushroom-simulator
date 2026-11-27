@@ -85,6 +85,9 @@ export function createNetwork(world) {
     ea: new Int32Array(cap), eb: new Int32Array(cap),
     eLen: new Float32Array(cap), eD: new Float32Array(cap),
     eQ: new Float32Array(cap), eBorn: new Float32Array(cap),
+    // When each cord started and finished growing (sim minutes), and which tip grew it,
+    // so the renderer can replay growth smoothly.
+    eT0: new Float32Array(cap), eT1: new Float32Array(cap), eOwner: new Int32Array(cap),
     edgeCount: 0, deadEdges: 0,
     // Spatial hash by grid cell.
     head: new Int32Array(GW * GH).fill(-1),
@@ -100,6 +103,7 @@ export function createNetwork(world) {
     routeHours: 0,
     slowSteps: 0,
     version: 0,
+    minute: 0,
   };
 }
 
@@ -119,6 +123,7 @@ export function plantSpore(net, x, y, minute) {
 function germinate(net, rng, minute) {
   const s = net.spore;
   s.germinated = true;
+  net.minute = minute;
   const root = addNode(net, s.x, s.y, 0, 0, minute);
   net.root = root;
   net.pool = SPORE_RESERVE;
@@ -136,6 +141,7 @@ export function stepNetwork(net, rng, minute) {
   if (!s || !s.germinated) return;
   const dtH = SIM_DT_MIN / 60;
   const w = net.world;
+  net.minute = minute;
   const tips = net.tips;
   let active = 0;
   for (const t of tips) if (!t.dead) active++;
@@ -159,31 +165,26 @@ export function stepNetwork(net, rng, minute) {
     tip.acc += tip.rate * dtH;
     if (tip.acc < SEG) continue;
     tip.acc -= SEG;
+    // When, within this tick, the segment was actually finished.
+    const t1 = minute - (tip.acc / tip.rate) * 60;
+    const t0 = tip.segStart ?? t1;
+    tip.segStart = t1;
 
-    // Choose a direction by sensing ahead.
-    let best = -Infinity, bestAng = tip.ang;
-    for (const d of TURN_STEPS) {
-      const a = tip.ang + d + rng.range(-0.08, 0.08);
-      const px = x + Math.cos(a) * SEG, py = y + Math.sin(a) * SEG;
-      if (!passable(w, px, py)) continue;
-      const sx = x + Math.cos(a) * SENSE_DIST, sy = y + Math.sin(a) * SENSE_DIST;
-      const score = senseScore(net, sx, sy) + Math.cos(d) * 1.2 + rng() * 0.3;
-      if (score > best) { best = score; bestAng = a; }
-    }
-    if (best === -Infinity) {
-      tip.ang += rng() < 0.5 ? 1.2 : -1.2;
-      if (++tip.blocked > 6) tip.dead = true;
+    // The direction was chosen when this segment started, so what's drawn
+    // while it grows is where it ends up. (Re-choose if it's now blocked.)
+    let px = x + Math.cos(tip.ang) * SEG, py = y + Math.sin(tip.ang) * SEG;
+    if (!passable(w, px, py)) {
+      tip.acc = 0;
+      if (!chooseDirection(net, tip, x, y, rng) && ++tip.blocked > 6) tip.dead = true;
       continue;
     }
-    tip.blocked = 0;
-    tip.ang = bestAng;
-    const px = x + Math.cos(bestAng) * SEG, py = y + Math.sin(bestAng) * SEG;
 
     // Fusion with another thread (anastomosis).
     if (tip.segs >= FUSE_MIN_SEGS) {
       const j = findFusion(net, tip, px, py);
       if (j >= 0 && rng() < FUSE_CHANCE) {
-        addEdge(net, tip.node, j, Math.hypot(net.nx[j] - x, net.ny[j] - y), minute);
+        const fe = addEdge(net, tip.node, j, Math.hypot(net.nx[j] - x, net.ny[j] - y), minute);
+        setEdgeTiming(net, fe, t0, t1, tip.id);
         tip.dead = true;
         net.fusions++;
         net.version++;
@@ -195,12 +196,15 @@ export function stepNetwork(net, rng, minute) {
     tip.segs++;
     const nd = addNode(net, px, py, tip.id, tip.segs, minute);
     const ne = addEdge(net, tip.node, nd, SEG, minute);
+    setEdgeTiming(net, ne, t0, t1, tip.id);
     if (tip.lastEdge >= 0 && net.ea[tip.lastEdge] >= 0) net.eD[ne] = Math.max(D_NEW, net.eD[tip.lastEdge] * 0.85);
     tip.lastEdge = ne;
     tip.node = nd;
     tip.spent += SEG_COST;
     net.pool -= SEG_COST;
     net.version++;
+    // Pick the direction of the next segment now, sensing ahead.
+    if (!chooseDirection(net, tip, px, py, rng)) tip.blocked++;
 
     // Branching: more where it's rich and the tip is well supplied.
     const pc = cellAt(px, py);
@@ -425,22 +429,25 @@ export function networkSnapshot(net) {
   const m = live.length;
   const edgeA = new Int32Array(m), edgeB = new Int32Array(m);
   const edgeD = new Float32Array(m), edgeQ = new Float32Array(m);
+  const edgeT0 = new Float32Array(m), edgeT1 = new Float32Array(m), edgeOwner = new Int32Array(m);
   for (let k = 0; k < m; k++) {
     const e = live[k];
     edgeA[k] = net.ea[e]; edgeB[k] = net.eb[e];
     edgeD[k] = net.eD[e]; edgeQ[k] = net.eQ[e];
+    edgeT0[k] = net.eT0[e]; edgeT1[k] = net.eT1[e]; edgeOwner[k] = net.eOwner[e];
   }
-  // Tips: x, y, angle, progress (units), rate (units/hour), idle flag, id.
+  // Tips: x, y, angle, progress (units), rate (units/hour), idle flag, id, segment start (minute).
   const tipsArr = [];
   for (const t of net.tips) {
     if (t.dead) continue;
     // Idle flag only for tips stalled for a while (dry soil or no food).
-    tipsArr.push(net.nx[t.node], net.ny[t.node], t.ang, t.acc, t.rate || 0, (t.idleH || 0) > 6 ? 1 : 0, t.id);
+    tipsArr.push(net.nx[t.node], net.ny[t.node], t.ang, t.acc, t.rate || 0, (t.idleH || 0) > 6 ? 1 : 0, t.id, t.segStart ?? net.minute);
   }
   return {
     nodeX: net.nx.slice(0, net.nodeCount),
     nodeY: net.ny.slice(0, net.nodeCount),
-    edgeA, edgeB, edgeD, edgeQ,
+    edgeA, edgeB, edgeD, edgeQ, edgeT0, edgeT1, edgeOwner,
+    minute: net.minute,
     tips: Float32Array.from(tipsArr),
     spore: net.spore ? { x: net.spore.x, y: net.spore.y, germinated: net.spore.germinated } : null,
   };
@@ -550,12 +557,38 @@ function findFusion(net, tip, x, y) {
   return best;
 }
 
+// Choose a tip's heading by sensing ahead: toward food scent and richer,
+// damper soil, mostly straight on. Returns false if every way is blocked.
+function chooseDirection(net, tip, x, y, rng) {
+  const w = net.world;
+  let best = -Infinity, bestAng = tip.ang;
+  for (const d of TURN_STEPS) {
+    const a = tip.ang + d + rng.range(-0.08, 0.08);
+    const px = x + Math.cos(a) * SEG, py = y + Math.sin(a) * SEG;
+    if (!passable(w, px, py)) continue;
+    const sx = x + Math.cos(a) * SENSE_DIST, sy = y + Math.sin(a) * SENSE_DIST;
+    const score = senseScore(net, sx, sy) + Math.cos(d) * 1.2 + rng() * 0.3;
+    if (score > best) { best = score; bestAng = a; }
+  }
+  if (best === -Infinity) {
+    tip.ang += rng() < 0.5 ? 1.2 : -1.2;
+    return false;
+  }
+  tip.blocked = 0;
+  tip.ang = bestAng;
+  return true;
+}
+
+function setEdgeTiming(net, e, t0, t1, owner) {
+  net.eT0[e] = t0; net.eT1[e] = t1; net.eOwner[e] = owner;
+}
+
 function addTip(net, node, ang, eff = 1) {
   net.tips.push({
     id: net.nextTipId++,
     parentId: net.nOwner[node],
     branchSeq: net.nSeq[node],
-    node, ang, acc: 0, rate: 0, segs: 0, lastBranch: 0, blocked: 0, eff, lastEdge: -1, spent: 0,
+    node, ang, acc: 0, rate: 0, segStart: net.minute, segs: 0, lastBranch: 0, blocked: 0, eff, lastEdge: -1, spent: 0,
     dormant: false, starved: false, dead: false,
   });
 }
@@ -578,6 +611,7 @@ function addEdge(net, a, b, len, minute) {
   const e = net.edgeCount++;
   net.ea[e] = a; net.eb[e] = b; net.eLen[e] = Math.max(1, len);
   net.eD[e] = D_NEW; net.eQ[e] = 0; net.eBorn[e] = minute;
+  net.eT0[e] = minute; net.eT1[e] = minute; net.eOwner[e] = -1;
   net.nDeg[a]++; net.nDeg[b]++;
   return e;
 }
@@ -609,6 +643,7 @@ function compactEdges(net) {
     if (k !== e) {
       net.ea[k] = net.ea[e]; net.eb[k] = net.eb[e]; net.eLen[k] = net.eLen[e];
       net.eD[k] = net.eD[e]; net.eQ[k] = net.eQ[e]; net.eBorn[k] = net.eBorn[e];
+      net.eT0[k] = net.eT0[e]; net.eT1[k] = net.eT1[e]; net.eOwner[k] = net.eOwner[e];
     }
     k++;
   }
@@ -658,7 +693,7 @@ function growNodes(net) {
 }
 
 function growEdges(net) {
-  for (const key of ['ea', 'eb', 'eLen', 'eD', 'eQ', 'eBorn']) net[key] = grow(net[key]);
+  for (const key of ['ea', 'eb', 'eLen', 'eD', 'eQ', 'eBorn', 'eT0', 'eT1', 'eOwner']) net[key] = grow(net[key]);
 }
 
 function grow(arr) {

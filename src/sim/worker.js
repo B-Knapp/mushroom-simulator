@@ -99,7 +99,8 @@ function sendNetwork(s) {
   const snap = networkSnapshot(s.net);
   postMessage({ type: 'network', seed: s.seed, ...snap }, [
     snap.nodeX.buffer, snap.nodeY.buffer,
-    snap.edgeA.buffer, snap.edgeB.buffer, snap.edgeD.buffer, snap.edgeQ.buffer, snap.tips.buffer,
+    snap.edgeA.buffer, snap.edgeB.buffer, snap.edgeD.buffer, snap.edgeQ.buffer,
+    snap.edgeT0.buffer, snap.edgeT1.buffer, snap.edgeOwner.buffer, snap.tips.buffer,
   ]);
   // Food decay changes slowly; send it at most once per simulated hour.
   const hour = Math.floor(s.minute / 60);
