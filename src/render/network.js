@@ -12,13 +12,20 @@
 // with amber flow.
 
 const SEG = 6;
+// Width steps by thickness: fine threads are faint and cool white, cords
+// get wider, more opaque and warmer (like real rhizomorphs).
 const BUCKETS = [
-  { maxD: 0.9, w: 0.35, a: 0.4 },
-  { maxD: 1.4, w: 0.6, a: 0.56 },
-  { maxD: 2.0, w: 1.1, a: 0.72 },
-  { maxD: 2.8, w: 1.8, a: 0.86 },
-  { maxD: Infinity, w: 2.8, a: 0.95 },
+  { maxD: 0.75, w: 0.32, a: 0.46, c: [236, 236, 230] },
+  { maxD: 0.95, w: 0.44, a: 0.54, c: [238, 236, 228] },
+  { maxD: 1.2, w: 0.6, a: 0.62, c: [240, 236, 224] },
+  { maxD: 1.5, w: 0.8, a: 0.62, c: [242, 234, 218] },
+  { maxD: 1.9, w: 1.0, a: 0.72, c: [242, 232, 212] },
+  { maxD: 2.4, w: 1.3, a: 0.8, c: [240, 228, 204] },
+  { maxD: 3.0, w: 1.6, a: 0.86, c: [236, 222, 196] },
+  { maxD: 3.5, w: 1.95, a: 0.9, c: [230, 214, 186] },
+  { maxD: Infinity, w: 2.3, a: 0.93, c: [224, 206, 176] },
 ];
+const TUBE_FROM = 4;      // buckets from here get shadow + highlight (tube look)
 const CACHE_MS = 66;
 const PULSE_MIN = 0.03;   // flow below this shows no pulse
 const PULSE_MAX = 2500;   // most pulses drawn
@@ -102,7 +109,7 @@ export class NetworkView {
       if (glow) ctx.globalCompositeOperation = 'lighter';
       ctx.drawImage(this.cache, 0, 0);
       ctx.restore();
-      this.drawPulses(ctx, cam, glow);
+      if (glow) this.drawPulses(ctx, cam, glow); // flow shown in the resource view
     }
     this.drawTips(ctx, cam, glow, now, speed);
     this.drawSpore(ctx, cam.zoom, now);
@@ -139,84 +146,127 @@ export class NetworkView {
   strokeCords(ctx, z, glow) {
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
-    if (glow) ctx.globalCompositeOperation = 'lighter';
-    // Soft halo first (the fuzzy look of mycelium), then the cord itself.
-    for (let k = 0; k < BUCKETS.length; k++) {
-      const p = this.paths[k];
-      if (!p) continue;
-      const b = BUCKETS[k];
-      ctx.strokeStyle = glow ? 'rgba(90,255,200,0.08)' : 'rgba(240,234,218,0.07)';
-      ctx.lineWidth = Math.max(b.w * 4, 3 / z);
-      ctx.stroke(p);
+    const P = this.paths;
+    if (glow) {
+      ctx.globalCompositeOperation = 'lighter';
+      for (let k = 0; k < BUCKETS.length; k++) {
+        if (!P[k]) continue;
+        const b = BUCKETS[k];
+        ctx.strokeStyle = 'rgba(90,255,200,0.07)';
+        ctx.lineWidth = Math.max(b.w * 4, 3 / z);
+        ctx.stroke(P[k]);
+      }
+      for (let k = 0; k < BUCKETS.length; k++) {
+        if (!P[k]) continue;
+        const b = BUCKETS[k];
+        ctx.strokeStyle = `rgba(150,255,225,${b.a})`;
+        ctx.lineWidth = Math.max(b.w, (0.4 + 0.08 * k) / z);
+        ctx.stroke(P[k]);
+      }
+      ctx.globalCompositeOperation = 'source-over';
+      return;
     }
+
+    // Soft cottony halo around everything.
     for (let k = 0; k < BUCKETS.length; k++) {
-      const p = this.paths[k];
-      if (!p) continue;
-      const b = BUCKETS[k];
-      ctx.strokeStyle = glow ? `rgba(150,255,225,${b.a})` : `rgba(246,241,228,${b.a})`;
-      ctx.lineWidth = Math.max(b.w, (0.45 + 0.15 * k) / z);
-      ctx.stroke(p);
+      if (!P[k]) continue;
+      ctx.strokeStyle = 'rgba(235,228,212,0.045)';
+      ctx.lineWidth = Math.max(BUCKETS[k].w * 2 + 1.6, 2.5 / z);
+      ctx.stroke(P[k]);
     }
-    ctx.globalCompositeOperation = 'source-over';
+    // Shadow under thick cords, for depth.
+    ctx.save();
+    ctx.translate(0, 0.6);
+    for (let k = TUBE_FROM; k < BUCKETS.length; k++) {
+      if (!P[k]) continue;
+      ctx.strokeStyle = 'rgba(25,15,6,0.35)';
+      ctx.lineWidth = BUCKETS[k].w + 1.2;
+      ctx.stroke(P[k]);
+    }
+    ctx.restore();
+    // The cords.
+    for (let k = 0; k < BUCKETS.length; k++) {
+      if (!P[k]) continue;
+      const b = BUCKETS[k];
+      ctx.strokeStyle = `rgba(${b.c[0]},${b.c[1]},${b.c[2]},${b.a})`;
+      ctx.lineWidth = Math.max(b.w, (0.4 + 0.08 * k) / z);
+      ctx.stroke(P[k]);
+    }
+    // Highlight along the top of thick cords: a rounded, tube-like look.
+    ctx.save();
+    for (let k = TUBE_FROM; k < BUCKETS.length; k++) {
+      if (!P[k]) continue;
+      const b = BUCKETS[k];
+      ctx.setTransform(ctx.getTransform().translate(0, -b.w * 0.18));
+      ctx.strokeStyle = 'rgba(255,253,246,0.3)';
+      ctx.lineWidth = b.w * 0.3;
+      ctx.stroke(P[k]);
+      ctx.setTransform(ctx.getTransform().translate(0, b.w * 0.18));
+    }
+    ctx.restore();
   }
 
-  // Bright specks marching along busy cords in the direction of flow,
-  // drawn in a few brightness groups to keep it cheap.
+  // Soft streaks gliding along busy cords in the direction of flow.
   drawPulses(ctx, cam, glow) {
     const p = this.pulses;
     if (!p || !p.length) return;
     const z = cam.zoom;
     const vx0 = cam.x, vy0 = cam.y, vx1 = cam.x + cam.vw / z, vy1 = cam.y + cam.vh / z;
     const u = this.phase % 1;
-    const base = Math.max(0.9, 1.4 / z);
+    const u0 = Math.max(0, u - 0.45);
+    ctx.lineCap = 'round';
     if (glow) ctx.globalCompositeOperation = 'lighter';
     for (let g = 0; g < 4; g++) {
       const lo = g / 4, hi = (g + 1) / 4, str = (lo + hi) / 2;
-      ctx.fillStyle = glow
-        ? `rgba(255,190,90,${0.35 + 0.6 * str})`
-        : `rgba(255,252,240,${0.25 + 0.55 * str})`;
-      const s = base * (0.6 + 0.8 * str), h = s / 2;
+      const path = new Path2D();
       for (let k = 0; k < p.length; k += 5) {
         const v = p[k + 4];
         if (v < lo || v >= hi + (g === 3 ? 1 : 0)) continue;
         if (p[k] < vx0 || p[k] > vx1 || p[k + 1] < vy0 || p[k + 1] > vy1) continue;
-        ctx.fillRect(p[k] + (p[k + 2] - p[k]) * u - h, p[k + 1] + (p[k + 3] - p[k + 1]) * u - h, s, s);
+        const dx = p[k + 2] - p[k], dy = p[k + 3] - p[k + 1];
+        path.moveTo(p[k] + dx * u0, p[k + 1] + dy * u0);
+        path.lineTo(p[k] + dx * u, p[k + 1] + dy * u);
       }
+      ctx.strokeStyle = glow
+        ? `rgba(255,190,90,${0.3 + 0.6 * str})`
+        : `rgba(255,250,232,${0.12 + 0.35 * str})`;
+      ctx.lineWidth = Math.max(0.5, 0.9 / z) * (0.7 + 1.2 * str);
+      ctx.stroke(path);
     }
     ctx.globalCompositeOperation = 'source-over';
   }
 
-  // Growing tips extend smoothly between snapshots; idle ones are dim.
+  // Growing tips extend smoothly between snapshots and taper to a point.
   drawTips(ctx, cam, glow, now, speed) {
     const t = this.tips;
     if (!t || !t.length) return;
     const z = cam.zoom;
     const simHours = ((now - this.tipTime) / 1000) * speed;
-    const r = Math.max(0.9, 1.3 / z);
+    const base = glow ? '150,255,225' : '242,238,228';
+    const w0 = Math.max(0.35, 0.55 / z);
     ctx.lineCap = 'round';
-    ctx.lineWidth = Math.max(0.4, 0.7 / z);
-    ctx.strokeStyle = glow ? 'rgba(150,255,225,0.6)' : 'rgba(246,241,228,0.55)';
-    for (let i = 0; i < t.length; i += 6) {
-      const x = t[i], y = t[i + 1], ang = t[i + 2];
-      const ext = Math.min(SEG, t[i + 3] + t[i + 4] * simHours);
-      const ex = x + Math.cos(ang) * ext, ey = y + Math.sin(ang) * ext;
-      if (ext > 0.2) {
-        ctx.beginPath();
-        ctx.moveTo(x, y);
-        ctx.lineTo(ex, ey);
-        ctx.stroke();
+    // Three passes, each a little thinner and further out, for the taper.
+    const seg = [[0, 0.55, 1, 0.6], [0.5, 0.85, 0.65, 0.5], [0.8, 1.0, 0.4, 0.35]];
+    for (const [f0, f1, wf, af] of seg) {
+      const path = new Path2D();
+      for (let i = 0; i < t.length; i += 6) {
+        if (t[i + 5]) continue; // idle tips just end with their cord
+        const x = t[i], y = t[i + 1], ang = t[i + 2];
+        const ext = Math.min(SEG, t[i + 3] + t[i + 4] * simHours) + 1.2;
+        const c = Math.cos(ang), s = Math.sin(ang);
+        path.moveTo(x + c * ext * f0, y + s * ext * f0);
+        path.lineTo(x + c * ext * f1, y + s * ext * f1);
       }
-      ctx.fillStyle = t[i + 5] ? 'rgba(200,190,170,0.35)' : (glow ? 'rgba(220,255,240,0.95)' : 'rgba(255,252,240,0.95)');
-      ctx.beginPath();
-      ctx.arc(ex, ey, r, 0, Math.PI * 2);
-      ctx.fill();
+      ctx.strokeStyle = `rgba(${base},${af})`;
+      ctx.lineWidth = w0 * wf;
+      ctx.stroke(path);
     }
   }
 
   // The spore, pulsing gently until it germinates.
   drawSpore(ctx, z, now) {
     const s = this.spore;
-    if (!s) return;
+    if (!s || s.germinated) return;
     const pulse = s.germinated ? 0 : (Math.sin(now / 400) + 1) / 2;
     ctx.fillStyle = 'rgba(255,248,230,0.95)';
     ctx.beginPath();

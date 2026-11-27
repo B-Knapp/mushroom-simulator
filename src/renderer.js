@@ -30,8 +30,9 @@ export class Renderer {
 
   setWorld(world, baked) {
     this.world = world;
-    this.base = baked;
-    this.overlays.setWorld(world);
+    this.base = baked.base;
+    this.foodLayer = baked.food;
+    this.overlays.setWorld(world, baked.food);
   }
 
   clearWorld() {
@@ -64,7 +65,7 @@ export class Renderer {
 
     if (!this.base) return;
     ctx.drawImage(this.base, 0, 0);
-    if (this.overlays.hasDecay) ctx.drawImage(this.overlays.decay.canvas, 0, 0, WORLD_W, WORLD_H);
+    ctx.drawImage(this.foodLayer.canvas, 0, 0);
 
     if (this.resourceView) {
       ctx.fillStyle = 'rgba(8,6,4,0.8)';
@@ -80,9 +81,17 @@ export class Renderer {
 
     if (state && state.raining) this.drawRain(state, now);
 
-    ctx.strokeStyle = 'rgba(239,230,212,0.10)';
-    ctx.lineWidth = 1 / cam.zoom;
-    ctx.strokeRect(0, 0, WORLD_W, WORLD_H);
+    // Gentle vignette, in screen space.
+    const W = this.canvas.width, H = this.canvas.height;
+    if (!this.vignette || this.vigW !== W || this.vigH !== H) {
+      const g = ctx.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.35, W / 2, H / 2, Math.hypot(W, H) * 0.6);
+      g.addColorStop(0, 'rgba(0,0,0,0)');
+      g.addColorStop(1, 'rgba(0,0,0,0.38)');
+      this.vignette = g; this.vigW = W; this.vigH = H;
+    }
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.fillStyle = this.vignette;
+    ctx.fillRect(0, 0, W, H);
   }
 
   // Rain streaks falling through the air band to the litter.
