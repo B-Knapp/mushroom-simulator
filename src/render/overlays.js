@@ -41,7 +41,9 @@ export class Overlays {
 
       // Resource view: additive blue for water, amber for nutrients.
       const n = food[i] !== -1 ? 0.85 : Math.min(1, (nutrient[i] / 255) * 2.2);
-      const wv = Math.pow(sat, 1.6) * 0.62;
+      // Blue shows wetness relative to what this soil normally holds, so
+      // damp clay reads as normal and fresh rain or dry spots stand out.
+      const wv = Math.pow(Math.min(1, Math.max(0, (rel - 0.55) / 1.2)), 1.2) * 0.8;
       rd[k] = Math.min(255, 40 * wv + 255 * n);
       rd[k + 1] = Math.min(255, 140 * wv + 160 * n);
       rd[k + 2] = Math.min(255, 255 * wv + 40 * n);
