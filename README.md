@@ -44,8 +44,8 @@ src/render/soil.js  bakes the static world (layers, rocks, litter, wood)
 src/render/overlays.js  wet-soil darkening and the resource view
 src/sim/world.js    procedural world generation
 src/sim/environment.js  water, evaporation, rain, nutrient leaching
-src/sim/network.js  the fungal network: germination, tips, branching, fusion, feeding
-src/render/network.js   draws the network (cached when zoomed out)
+src/sim/network.js  the fungal network: growth, food scent, supply routes, thickening, die-back
+src/render/network.js   draws cords by thickness, flow pulses and smoothly growing tips
 src/sim/worker.js   simulation loop and state
 src/main.js         wiring, UI, frame loop
 ```

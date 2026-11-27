@@ -14,7 +14,7 @@
 // not hydrology.
 
 import { GW, GH, ENV_EVERY_TICKS, SIM_DT_MIN } from '../config.js';
-import { AIR, ROCK, FC, PERM } from '../soilTypes.js';
+import { AIR, ROCK, WOOD, FC, PERM } from '../soilTypes.js';
 
 const STEP_MIN = ENV_EVERY_TICKS * SIM_DT_MIN; // simulated minutes per env step
 
@@ -86,6 +86,7 @@ export function createEnvironment(world) {
     steps: 0,
     rain: 0,        // current rain intensity (saturation added per step at the surface)
     rainLeft: 0,    // simulated minutes of rain remaining
+    nextShower: -1, // minute of the next automatic shower (simple weather until Phase 4)
   };
 }
 
@@ -106,7 +107,18 @@ export function startRain(env, hours = 8, intensity = 0.5 * S) {
   env.rainLeft = hours * 60;
 }
 
-export function stepEnvironment(env, minute) {
+// Simple weather until seasons arrive in Phase 4: a random shower every
+// few days.
+function weather(env, minute, rng) {
+  if (env.nextShower < 0) env.nextShower = minute + rng.range(2, 6) * 1440;
+  if (minute >= env.nextShower) {
+    if (env.rainLeft <= 0) startRain(env, rng.range(3, 10), 0.5 * S * rng.range(0.6, 1.2));
+    env.nextShower = minute + rng.range(3, 9) * 1440;
+  }
+}
+
+export function stepEnvironment(env, minute, rng) {
+  if (rng) weather(env, minute, rng);
   const { world, fc, wet, kRight, kDown } = env;
   const m = world.moisture;
   const surface = world.surface;
@@ -120,7 +132,17 @@ export function stepEnvironment(env, minute) {
       // Water that can't fit in the top cell infiltrates a few cells down;
       // anything left after that runs off.
       let left = amt;
-      for (let y = surface[x], d = 0; y < GH && d < 6 && left > 0; y++, d++) {
+      let y = surface[x];
+      // Rain on a log mostly runs off or drips through to the ground below;
+      // the wood keeps a share.
+      while (y < GH && world.type[y * GW + x] === WOOD) {
+        const i = y * GW + x;
+        const put = Math.min(left * 0.12, 1 - m[i]);
+        m[i] += put;
+        left -= put;
+        y++;
+      }
+      for (let d = 0; y < GH && d < 6 && left > 0; y++, d++) {
         const i = y * GW + x;
         if (!wet[i]) break;
         const put = Math.min(left, 1 - m[i]);
@@ -232,13 +254,16 @@ export function stepEnvironment(env, minute) {
 
   // 6. Leaching from food sources into touching soil.
   const n = world.nutrient;
+  const stock = world.cellStock;
   for (const f of world.foods) {
     if (f.stock <= 0) continue;
     for (let h = 0; h < f.halo.length; h++) {
-      const i = f.halo[h];
-      const add = Math.min(f.stock, f.leach * S * (m[i] / Math.max(0.05, fc[i])) * (1 - n[i]));
+      const i = f.halo[h], src = f.haloSrc[h];
+      if (stock[src] <= 0) continue;
+      const add = Math.min(stock[src], f.leach * S * (m[i] / Math.max(0.05, fc[i])) * (1 - n[i]));
       if (add <= 0) continue;
       n[i] += add;
+      stock[src] -= add;
       f.stock -= add;
     }
   }

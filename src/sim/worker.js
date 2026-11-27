@@ -6,7 +6,7 @@ import { SIM_DT_MIN, SIM_MIN_PER_SEC_AT_1X, START_MINUTE, ENV_EVERY_TICKS, GW, G
 import { makeRng, subSeed } from '../rng.js';
 import { generateWorld } from './world.js';
 import { createEnvironment, stepEnvironment, startRain, airTemp } from './environment.js';
-import { createNetwork, plantSpore, stepNetwork, hourlyNetwork, networkSnapshot, networkStats } from './network.js';
+import { createNetwork, plantSpore, stepNetwork, hourlyNetwork, networkSnapshot, networkStats, decaySnapshot } from './network.js';
 
 const LOOP_MS = 8;             // how often the loop wakes up
 const BUDGET_MS = 10;          // max time spent ticking per wake-up
@@ -36,12 +36,14 @@ function createSim(seed) {
   const s = {
     seed,
     rng: makeRng(subSeed(seed, 'sim')),
+    weatherRng: makeRng(subSeed(seed, 'weather')),
     minute: START_MINUTE - WARMUP_DAYS * 1440,
     ticks: 0,
     world,
     env,
     net: createNetwork(world),
     netSent: -1,
+    decayHour: -1,
   };
   // Warm up without counting toward the visible clock.
   while (s.minute < START_MINUTE) tick(s);
@@ -54,7 +56,7 @@ function tick(s) {
   s.ticks++;
   stepNetwork(s.net, s.rng, s.minute);
   if (s.ticks % ENV_EVERY_TICKS === 0) {
-    stepEnvironment(s.env, s.minute);
+    stepEnvironment(s.env, s.minute, s.weatherRng);
     hourlyNetwork(s.net, s.rng, s.minute);
   }
   // Later phases plug in here: transport, organisms, seasons.
@@ -96,9 +98,16 @@ function sendNetwork(s) {
   s.netSent = s.net.version;
   const snap = networkSnapshot(s.net);
   postMessage({ type: 'network', seed: s.seed, ...snap }, [
-    snap.nodeX.buffer, snap.nodeY.buffer, snap.nodeBorn.buffer,
-    snap.edgeA.buffer, snap.edgeB.buffer, snap.edgeBorn.buffer, snap.tips.buffer,
+    snap.nodeX.buffer, snap.nodeY.buffer,
+    snap.edgeA.buffer, snap.edgeB.buffer, snap.edgeD.buffer, snap.edgeQ.buffer, snap.tips.buffer,
   ]);
+  // Food decay changes slowly; send it at most once per simulated hour.
+  const hour = Math.floor(s.minute / 60);
+  if (hour !== s.decayHour) {
+    s.decayHour = hour;
+    const d = decaySnapshot(s.net);
+    postMessage({ type: 'decay', seed: s.seed, ...d }, [d.eaten.buffer, d.colon.buffer]);
+  }
 }
 
 function loop() {

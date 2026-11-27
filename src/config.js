@@ -18,7 +18,7 @@ export const GROUND_ROW = 30;
 export const SIM_DT_MIN = 5;
 
 // The environment (water, nutrients) updates every this many ticks.
-export const ENV_EVERY_TICKS = 12; // 1 simulated hour
+export const ENV_EVERY_TICKS = 24; // 2 simulated hours
 
 // At 1x, one real second is this many simulated minutes (1 sim hour).
 export const SIM_MIN_PER_SEC_AT_1X = 60;

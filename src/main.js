@@ -125,7 +125,8 @@ worker.onmessage = (e) => {
   if (d.type === 'state') state = d;
   else if (d.type === 'world') renderer.setWorld(d, bakeWorld(d));
   else if (d.type === 'grids') renderer.updateGrids(d.moisture, d.nutrient);
-  else if (d.type === 'network') renderer.setNetwork(d, state ? state.minute : 0);
+  else if (d.type === 'network') renderer.setNetwork(d);
+  else if (d.type === 'decay') renderer.updateDecay(d.eaten, d.colon);
   else if (d.type === 'planted') {
     if (d.ok) {
       showHint('Spore planted. It will germinate once the soil is damp.');

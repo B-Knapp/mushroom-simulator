@@ -40,8 +40,12 @@ export class Renderer {
     this.network.clear();
   }
 
-  setNetwork(snap, minute) {
-    this.network.set(snap, minute);
+  setNetwork(snap) {
+    this.network.set(snap, performance.now());
+  }
+
+  updateDecay(eaten, colon) {
+    this.overlays.updateDecay(eaten, colon);
   }
 
   updateGrids(moisture, nutrient) {
@@ -60,6 +64,7 @@ export class Renderer {
 
     if (!this.base) return;
     ctx.drawImage(this.base, 0, 0);
+    if (this.overlays.hasDecay) ctx.drawImage(this.overlays.decay.canvas, 0, 0, WORLD_W, WORLD_H);
 
     if (this.resourceView) {
       ctx.fillStyle = 'rgba(8,6,4,0.8)';
@@ -71,7 +76,7 @@ export class Renderer {
       ctx.drawImage(this.overlays.wet.canvas, 0, 0, WORLD_W, WORLD_H);
     }
 
-    this.network.draw(ctx, cam, this.resourceView, now, dpr);
+    this.network.draw(ctx, cam, this.resourceView, now, dpr, state ? state.speed : 0);
 
     if (state && state.raining) this.drawRain(state, now);
 

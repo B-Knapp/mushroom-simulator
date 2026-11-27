@@ -9,6 +9,8 @@ export class Overlays {
   constructor() {
     this.wet = makeLayer();
     this.res = makeLayer();
+    this.decay = makeLayer();
+    this.hasDecay = false;
     this.cellType = null;
     this.food = null;
   }
@@ -16,6 +18,50 @@ export class Overlays {
   setWorld(w) {
     this.cellType = w.cellType;
     this.food = w.food;
+    this.world = w;
+    this.hasDecay = false;
+    // What shows through once a food cell is eaten away.
+    this.under = new Uint8Array(GW * GH * 3);
+    for (let i = 0; i < w.food.length; i++) {
+      const fid = w.food[i];
+      if (fid === -1) continue;
+      const kind = w.foods[fid].kind;
+      const x = i % GW, y = (i / GW) | 0;
+      let c;
+      if (kind === 'branch') c = [107, 76, 52];               // loam
+      else if (kind === 'log') c = y >= w.litterTop[x] ? [62, 44, 29] : [43, 34, 27];
+      else c = y >= w.ground[x] - 3 ? [96, 66, 36] : [43, 34, 27]; // thin litter, else air
+      this.under.set(c, i * 3);
+    }
+  }
+
+  // Colonized food bleaches pale (as wood-rotting fungi do), then crumbles
+  // away as it's eaten.
+  updateDecay(eaten, colon) {
+    if (!this.food) return;
+    const d = this.decay.img.data;
+    const food = this.food, under = this.under;
+    let any = false;
+    for (let i = 0; i < food.length; i++) {
+      const k = i * 4;
+      if (food[i] === -1) { d[k + 3] = 0; continue; }
+      const e = eaten[i] / 255;
+      if (e > 0.55) {
+        const a = Math.min(1, (e - 0.55) / 0.4);
+        d[k] = under[i * 3]; d[k + 1] = under[i * 3 + 1]; d[k + 2] = under[i * 3 + 2];
+        d[k + 3] = a * 255;
+        any = true;
+      } else if (colon[i] || e > 0.05) {
+        const a = (colon[i] ? 0.22 : 0) + 0.5 * Math.min(1, e * 1.8);
+        d[k] = 232; d[k + 1] = 222; d[k + 2] = 198;
+        d[k + 3] = Math.min(0.7, a) * 255;
+        any = true;
+      } else {
+        d[k + 3] = 0;
+      }
+    }
+    this.decay.ctx.putImageData(this.decay.img, 0, 0);
+    this.hasDecay = any;
   }
 
   // moisture, nutrient: Uint8Array (0..255) from the worker.

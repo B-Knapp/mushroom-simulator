@@ -141,10 +141,19 @@ export function generateWorld(seed) {
     surface[x] = y;
   }
 
+  // Per-cell food stock, so food can be eaten away piece by piece.
+  const cellStock = new Float32Array(N);
+  for (const f of foods) {
+    const per = f.kind === 'leaves' ? 0.6 : 1.0;
+    for (const i of f.cells) cellStock[i] = per;
+    f.perCell = per;
+  }
+
   // Halo: non-food, water-holding cells touching a food cell. Nutrients
-  // leach from food into these.
+  // leach from the touching food cell into these. Stored as pairs.
   for (const f of foods) {
     const seen = new Set();
+    const halo = [], src = [];
     for (const i of f.cells) {
       const x = i % GW, y = (i / GW) | 0;
       for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
@@ -152,11 +161,16 @@ export function generateWorld(seed) {
         if (nx < 0 || ny < 0 || nx >= GW || ny >= GH) continue;
         const j = at(nx, ny);
         const t = type[j];
-        if (food[j] === -1 && t !== AIR && t !== ROCK && !seen.has(j)) { seen.add(j); }
+        if (food[j] === -1 && t !== AIR && t !== ROCK && !seen.has(j)) {
+          seen.add(j);
+          halo.push(j);
+          src.push(i);
+        }
       }
     }
-    f.halo = Int32Array.from(seen);
-    f.stock = f.cells.length * (f.kind === 'leaves' ? 0.6 : 1.0);
+    f.halo = Int32Array.from(halo);
+    f.haloSrc = Int32Array.from(src);
+    f.stock = f.cells.length * f.perCell;
     f.initialStock = f.stock;
   }
 
@@ -180,7 +194,7 @@ export function generateWorld(seed) {
   }
 
   return {
-    seed, type, food, moisture, nutrient, ground, litterTop, surface,
+    seed, type, food, cellStock, moisture, nutrient, ground, litterTop, surface,
     foods, rocks, sandPolys,
   };
 
