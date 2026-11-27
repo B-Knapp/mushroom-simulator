@@ -100,3 +100,18 @@ button.active {
 .sw.water { background: #2f7dff; box-shadow: 0 0 6px #2f7dff; }
 .sw.food { background: #ffae3c; box-shadow: 0 0 6px #ffae3c; }
 .clock .wx { color: #9fb6c9; margin-left: 4px; }
+
+#hint {
+  position: absolute;
+  top: 64px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 8px 14px;
+  background: rgba(20, 14, 10, 0.8);
+  border: 1px solid rgba(239, 230, 212, 0.18);
+  border-radius: 8px;
+  pointer-events: none;
+  transition: opacity 0.4s;
+}
+#hint.hidden { opacity: 0; }
+#hint.warn { color: #f3c48b; }

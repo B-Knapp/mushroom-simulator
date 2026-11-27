@@ -6,11 +6,13 @@ import { SIM_DT_MIN, SIM_MIN_PER_SEC_AT_1X, START_MINUTE, ENV_EVERY_TICKS, GW, G
 import { makeRng, subSeed } from '../rng.js';
 import { generateWorld } from './world.js';
 import { createEnvironment, stepEnvironment, startRain, airTemp } from './environment.js';
+import { createNetwork, plantSpore, stepNetwork, hourlyNetwork, networkSnapshot, networkStats } from './network.js';
 
 const LOOP_MS = 8;             // how often the loop wakes up
 const BUDGET_MS = 10;          // max time spent ticking per wake-up
 const SNAPSHOT_MS = 33;        // ~30 state snapshots per second
 const GRIDS_MS = 120;          // moisture/nutrient grids ~8 per second
+const NET_MS = 66;             // network geometry ~15 per second (when changed)
 const MAX_BACKLOG_STEPS = 200; // drop time rather than spiral if we fall behind
 const WARMUP_DAYS = 3;         // settle the water profile before play
 
@@ -20,6 +22,7 @@ let accMin = 0;
 let lastNow = 0;
 let lastSnapshot = 0;
 let lastGrids = 0;
+let lastNet = 0;
 
 // Rolling performance stats.
 let tickMsAvg = 0;
@@ -35,9 +38,10 @@ function createSim(seed) {
     rng: makeRng(subSeed(seed, 'sim')),
     minute: START_MINUTE - WARMUP_DAYS * 1440,
     ticks: 0,
-    edges: 0, // fungal network edges (Phase 2+)
     world,
     env,
+    net: createNetwork(world),
+    netSent: -1,
   };
   // Warm up without counting toward the visible clock.
   while (s.minute < START_MINUTE) tick(s);
@@ -48,8 +52,12 @@ function createSim(seed) {
 function tick(s) {
   s.minute += SIM_DT_MIN;
   s.ticks++;
-  if (s.ticks % ENV_EVERY_TICKS === 0) stepEnvironment(s.env, s.minute);
-  // Later phases plug in here: growth, transport, organisms, seasons.
+  stepNetwork(s.net, s.rng, s.minute);
+  if (s.ticks % ENV_EVERY_TICKS === 0) {
+    stepEnvironment(s.env, s.minute);
+    hourlyNetwork(s.net, s.rng, s.minute);
+  }
+  // Later phases plug in here: transport, organisms, seasons.
 }
 
 function sendWorld(s) {
@@ -81,6 +89,16 @@ function sendGrids(s) {
   const moisture = toBytes(s.world.moisture, 255);
   const nutrient = toBytes(s.world.nutrient, 255);
   postMessage({ type: 'grids', seed: s.seed, moisture, nutrient }, [moisture.buffer, nutrient.buffer]);
+}
+
+function sendNetwork(s) {
+  if (s.net.version === s.netSent) return;
+  s.netSent = s.net.version;
+  const snap = networkSnapshot(s.net);
+  postMessage({ type: 'network', seed: s.seed, ...snap }, [
+    snap.nodeX.buffer, snap.nodeY.buffer, snap.nodeBorn.buffer,
+    snap.edgeA.buffer, snap.edgeB.buffer, snap.edgeBorn.buffer, snap.tips.buffer,
+  ]);
 }
 
 function loop() {
@@ -120,7 +138,7 @@ function loop() {
       seed: sim.seed,
       minute: sim.minute,
       ticks: sim.ticks,
-      edges: sim.edges,
+      net: networkStats(sim.net),
       speed,
       actualRate: speed > 0 ? actualRate : 0,
       tickMs: tickMsAvg,
@@ -133,6 +151,10 @@ function loop() {
   if (sim && now - lastGrids >= GRIDS_MS) {
     lastGrids = now;
     sendGrids(sim);
+  }
+  if (sim && now - lastNet >= NET_MS) {
+    lastNet = now;
+    sendNetwork(sim);
   }
 
   setTimeout(loop, LOOP_MS);
@@ -147,6 +169,7 @@ onmessage = (e) => {
       accMin = 0;
       lastSnapshot = 0;
       lastGrids = 0;
+      lastNet = 0;
       sendWorld(sim);
       break;
     case 'speed':
@@ -154,6 +177,13 @@ onmessage = (e) => {
       accMin = 0;
       rateWindowMin = 0;
       rateWindowStart = performance.now();
+      break;
+    case 'plant':
+      if (sim) {
+        const ok = plantSpore(sim.net, msg.x, msg.y, sim.minute);
+        postMessage({ type: 'planted', seed: sim.seed, ok });
+        sendNetwork(sim);
+      }
       break;
     case 'rain':
       if (sim) startRain(sim.env, msg.hours ?? 8);

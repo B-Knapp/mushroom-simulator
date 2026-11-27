@@ -11,6 +11,7 @@ const seedEl = document.getElementById('seed');
 const debugEl = document.getElementById('debug');
 const legendEl = document.getElementById('legend');
 const resBtn = document.getElementById('resView');
+const hintEl = document.getElementById('hint');
 const speedButtons = [...document.querySelectorAll('#speeds button')];
 
 const camera = new Camera();
@@ -40,6 +41,7 @@ function startWorld(s, type) {
   seedEl.textContent = s;
   state = null;
   renderer.clearWorld();
+  showHint('Click the soil to plant a spore');
   worker.postMessage({ type, seed: s });
 }
 
@@ -63,6 +65,22 @@ function setResourceView(on) {
   renderer.resourceView = on;
   resBtn.classList.toggle('active', on);
   legendEl.classList.toggle('hidden', !on);
+}
+
+// ---- Planting ----
+
+let hintTimer = 0;
+function showHint(text, warn = false) {
+  hintEl.textContent = text;
+  hintEl.classList.toggle('warn', warn);
+  hintEl.classList.remove('hidden');
+  clearTimeout(hintTimer);
+}
+
+function onTap(sx, sy) {
+  if (!state || state.net.spore !== 'none') return;
+  const [x, y] = camera.screenToWorld(sx, sy);
+  worker.postMessage({ type: 'plant', x, y });
 }
 
 // ---- UI ----
@@ -107,6 +125,15 @@ worker.onmessage = (e) => {
   if (d.type === 'state') state = d;
   else if (d.type === 'world') renderer.setWorld(d, bakeWorld(d));
   else if (d.type === 'grids') renderer.updateGrids(d.moisture, d.nutrient);
+  else if (d.type === 'network') renderer.setNetwork(d, state ? state.minute : 0);
+  else if (d.type === 'planted') {
+    if (d.ok) {
+      showHint('Spore planted. It will germinate once the soil is damp.');
+      hintTimer = setTimeout(() => hintEl.classList.add('hidden'), 4000);
+    } else {
+      showHint("Spores can't grow in rock or air. Try the soil.", true);
+    }
+  }
 };
 worker.onerror = (e) => console.error('Simulation worker error:', e.message);
 
@@ -135,7 +162,10 @@ function frame(now) {
       `speed      ${speed}×  (actual ${state ? state.actualRate.toFixed(1) : '0.0'}×)`,
       `tick       ${state ? state.tickMs.toFixed(3) : '-'} ms`,
       `ticks      ${state ? state.ticks : 0}`,
-      `edges      ${state ? state.edges : 0}`,
+      `spore      ${state ? state.net.spore : '-'}`,
+      `edges      ${state ? state.net.edges : 0}  (fusions ${state ? state.net.fusions : 0})`,
+      `tips       ${state ? state.net.tips : 0}  (dormant ${state ? state.net.dormant : 0})`,
+      `biomass    ${state ? state.net.pool.toFixed(1) : 0}`,
       `zoom       ${camera.zoom.toFixed(2)}`,
     ].join('\n');
   }
@@ -148,7 +178,7 @@ function frame(now) {
 window.addEventListener('resize', () => renderer.resize());
 renderer.resize();
 camera.fit();
-attachCameraInput(canvas, camera);
+attachCameraInput(canvas, camera, onTap);
 startWorld(seed, 'init');
 setSpeed(1);
 requestAnimationFrame(frame);

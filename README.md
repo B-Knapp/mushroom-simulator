@@ -18,6 +18,7 @@ Then open http://localhost:8000. Add `?seed=1234` to load a specific world.
 
 | Input | Action |
 | --- | --- |
+| Click the soil | Plant a spore (one per world for now) |
 | Drag | Pan |
 | Scroll / pinch | Zoom around the cursor |
 | Space | Pause / resume |
@@ -43,6 +44,8 @@ src/render/soil.js  bakes the static world (layers, rocks, litter, wood)
 src/render/overlays.js  wet-soil darkening and the resource view
 src/sim/world.js    procedural world generation
 src/sim/environment.js  water, evaporation, rain, nutrient leaching
+src/sim/network.js  the fungal network: germination, tips, branching, fusion, feeding
+src/render/network.js   draws the network (cached when zoomed out)
 src/sim/worker.js   simulation loop and state
 src/main.js         wiring, UI, frame loop
 ```

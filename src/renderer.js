@@ -3,6 +3,7 @@
 
 import { WORLD_W, WORLD_H, CELL, GW } from './config.js';
 import { Overlays } from './render/overlays.js';
+import { NetworkView } from './render/network.js';
 
 export class Renderer {
   constructor(canvas, camera) {
@@ -13,6 +14,7 @@ export class Renderer {
     this.base = null;      // baked static world
     this.world = null;
     this.overlays = new Overlays();
+    this.network = new NetworkView();
     this.resourceView = false;
     this.rainDrops = makeRain();
   }
@@ -35,6 +37,11 @@ export class Renderer {
   clearWorld() {
     this.world = null;
     this.base = null;
+    this.network.clear();
+  }
+
+  setNetwork(snap, minute) {
+    this.network.set(snap, minute);
   }
 
   updateGrids(moisture, nutrient) {
@@ -63,6 +70,8 @@ export class Renderer {
     } else {
       ctx.drawImage(this.overlays.wet.canvas, 0, 0, WORLD_W, WORLD_H);
     }
+
+    this.network.draw(ctx, cam, this.resourceView, now, dpr);
 
     if (state && state.raining) this.drawRain(state, now);
 

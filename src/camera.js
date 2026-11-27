@@ -74,13 +74,16 @@ export class Camera {
 }
 
 // Wire mouse, trackpad and touch input on an element to a camera.
-export function attachCameraInput(el, cam) {
+// onTap(sx, sy) is called for a click or tap that didn't drag.
+export function attachCameraInput(el, cam, onTap) {
   const pointers = new Map();
   let pinchDist = 0;
+  let tap = null; // { x, y, moved } for a possible tap
 
   el.addEventListener('pointerdown', (e) => {
     el.setPointerCapture(e.pointerId);
     pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    tap = pointers.size === 1 ? { x: e.clientX, y: e.clientY, moved: false } : null;
     if (pointers.size === 2) pinchDist = distance();
     el.classList.add('dragging');
   });
@@ -88,6 +91,7 @@ export function attachCameraInput(el, cam) {
   el.addEventListener('pointermove', (e) => {
     const p = pointers.get(e.pointerId);
     if (!p) return;
+    if (tap && Math.hypot(e.clientX - tap.x, e.clientY - tap.y) > 5) tap.moved = true;
     if (pointers.size === 1) {
       cam.panBy(e.clientX - p.x, e.clientY - p.y);
     } else if (pointers.size === 2) {
@@ -102,6 +106,8 @@ export function attachCameraInput(el, cam) {
   });
 
   const end = (e) => {
+    if (e.type === 'pointerup' && tap && !tap.moved && pointers.size === 1 && onTap) onTap(e.clientX, e.clientY);
+    if (pointers.size <= 1) tap = null;
     pointers.delete(e.pointerId);
     if (pointers.size < 2) pinchDist = 0;
     if (pointers.size === 0) el.classList.remove('dragging');
