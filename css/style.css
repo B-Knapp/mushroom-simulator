@@ -49,7 +49,7 @@ html, body {
 }
 
 .title { font-weight: 600; letter-spacing: 0.02em; margin-right: 6px; }
-.clock { font-variant-numeric: tabular-nums; color: #d8c9ad; min-width: 9.5em; }
+.clock { font-variant-numeric: tabular-nums; color: #d8c9ad; min-width: 15em; }
 .seed { color: #b9a988; font-variant-numeric: tabular-nums; margin: 0 4px; }
 
 button {
@@ -82,3 +82,21 @@ button.active {
   white-space: pre;
 }
 #debug.hidden { display: none; }
+
+#legend {
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
+  display: flex;
+  gap: 14px;
+  padding: 6px 10px;
+  background: rgba(10, 8, 6, 0.7);
+  border-radius: 6px;
+  pointer-events: none;
+}
+#legend.hidden { display: none; }
+#legend span { display: flex; align-items: center; gap: 6px; }
+.sw { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+.sw.water { background: #2f7dff; box-shadow: 0 0 6px #2f7dff; }
+.sw.food { background: #ffae3c; box-shadow: 0 0 6px #ffae3c; }
+.clock .wx { color: #9fb6c9; margin-left: 4px; }

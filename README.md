@@ -23,9 +23,10 @@ Then open http://localhost:8000. Add `?seed=1234` to load a specific world.
 | Space | Pause / resume |
 | 1 / 2 / 3 | 1× / 10× / 100× speed |
 | F | Fit the world to the screen |
+| R | Resource view (moisture in blue, nutrients in amber) |
 | ` | Toggle the debug overlay |
 
-At 1×, one real second is one simulated hour.
+At 1×, one real second is one simulated hour. The Rain button starts an 8-hour shower (a test tool until weather arrives in Phase 4).
 
 ## Layout
 
@@ -36,7 +37,12 @@ src/config.js       shared constants (world size, tick length, speeds)
 src/rng.js          seeded random numbers
 src/camera.js       pan, zoom, fit
 src/renderer.js     draws the world under the camera
-src/render/soil.js  placeholder soil backdrop (replaced in Phase 1)
+src/soilTypes.js    soil materials: water holding, drainage, growth resistance
+src/noise.js        1D noise and polygon helpers
+src/render/soil.js  bakes the static world (layers, rocks, litter, wood)
+src/render/overlays.js  wet-soil darkening and the resource view
+src/sim/world.js    procedural world generation
+src/sim/environment.js  water, evaporation, rain, nutrient leaching
 src/sim/worker.js   simulation loop and state
 src/main.js         wiring, UI, frame loop
 ```

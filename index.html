@@ -22,6 +22,10 @@
       <button data-speed="100" title="100× (3)">100×</button>
     </div>
     <div class="group">
+      <button id="rain" title="Start an 8-hour rain shower (test tool until weather arrives)">Rain</button>
+      <button id="resView" title="Resource view: moisture and nutrients (R)">Resource view</button>
+    </div>
+    <div class="group">
       <button id="fit" title="Fit world to screen (F)">Fit</button>
       <span class="seed">Seed <span id="seed"></span></span>
       <button id="newWorld" title="Start a new world with a random seed">New world</button>
@@ -29,6 +33,11 @@
   </header>
 
   <pre id="debug"></pre>
+
+  <div id="legend" class="hidden">
+    <span><i class="sw water"></i>Moisture</span>
+    <span><i class="sw food"></i>Nutrients</span>
+  </div>
 
   <script type="module" src="src/main.js"></script>
 </body>

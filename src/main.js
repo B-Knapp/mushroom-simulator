@@ -1,15 +1,16 @@
 // Entry point: wires the simulation worker, camera, renderer and UI.
 
-import { SPEEDS } from './config.js';
 import { randomSeed } from './rng.js';
 import { Camera, attachCameraInput } from './camera.js';
 import { Renderer } from './renderer.js';
-import { bakeSoil } from './render/soil.js';
+import { bakeWorld } from './render/soil.js';
 
 const canvas = document.getElementById('view');
 const clockEl = document.getElementById('clock');
 const seedEl = document.getElementById('seed');
 const debugEl = document.getElementById('debug');
+const legendEl = document.getElementById('legend');
+const resBtn = document.getElementById('resView');
 const speedButtons = [...document.querySelectorAll('#speeds button')];
 
 const camera = new Camera();
@@ -37,8 +38,8 @@ function startWorld(s, type) {
   seed = s;
   writeSeed(s);
   seedEl.textContent = s;
-  renderer.setSoil(bakeSoil(s));
   state = null;
+  renderer.clearWorld();
   worker.postMessage({ type, seed: s });
 }
 
@@ -56,6 +57,14 @@ function togglePause() {
   else { lastNonZero = speed; setSpeed(0); }
 }
 
+// ---- Views ----
+
+function setResourceView(on) {
+  renderer.resourceView = on;
+  resBtn.classList.toggle('active', on);
+  legendEl.classList.toggle('hidden', !on);
+}
+
 // ---- UI ----
 
 for (const b of speedButtons) {
@@ -67,6 +76,8 @@ for (const b of speedButtons) {
 }
 document.getElementById('fit').addEventListener('click', () => camera.fit());
 document.getElementById('newWorld').addEventListener('click', () => startWorld(randomSeed(), 'reset'));
+document.getElementById('rain').addEventListener('click', () => worker.postMessage({ type: 'rain', hours: 8 }));
+resBtn.addEventListener('click', () => setResourceView(!renderer.resourceView));
 
 window.addEventListener('keydown', (e) => {
   if (e.target.tagName === 'INPUT') return;
@@ -75,21 +86,27 @@ window.addEventListener('keydown', (e) => {
   else if (e.key === '2') { lastNonZero = 10; setSpeed(10); }
   else if (e.key === '3') { lastNonZero = 100; setSpeed(100); }
   else if (e.key === 'f' || e.key === 'F') camera.fit();
+  else if (e.key === 'r' || e.key === 'R') setResourceView(!renderer.resourceView);
   else if (e.key === '`') debugEl.classList.toggle('hidden');
 });
 
-function formatClock(minute) {
-  const day = Math.floor(minute / 1440) + 1;
-  const m = Math.floor(minute % 1440);
+function formatClock(s) {
+  const day = Math.floor(s.minute / 1440) + 1;
+  const m = Math.floor(s.minute % 1440);
   const hh = String(Math.floor(m / 60)).padStart(2, '0');
   const mm = String(m % 60).padStart(2, '0');
-  return `Day ${day} · ${hh}:${mm}`;
+  const f = Math.round(s.airTemp * 9 / 5 + 32);
+  return `Day ${day} · ${hh}:${mm}<span class="wx">${f}°F${s.raining ? ' · Rain' : ''}</span>`;
 }
 
 // ---- Worker messages ----
 
 worker.onmessage = (e) => {
-  if (e.data.type === 'state' && e.data.seed === seed) state = e.data;
+  const d = e.data;
+  if (d.seed !== seed) return; // stale message from a previous world
+  if (d.type === 'state') state = d;
+  else if (d.type === 'world') renderer.setWorld(d, bakeWorld(d));
+  else if (d.type === 'grids') renderer.updateGrids(d.moisture, d.nutrient);
 };
 worker.onerror = (e) => console.error('Simulation worker error:', e.message);
 
@@ -101,7 +118,7 @@ let fpsT = performance.now();
 let uiT = 0;
 
 function frame(now) {
-  renderer.draw(state);
+  renderer.draw(state, now);
 
   frames++;
   if (now - fpsT >= 500) {
@@ -112,7 +129,7 @@ function frame(now) {
 
   if (now - uiT > 100) {
     uiT = now;
-    if (state) clockEl.textContent = formatClock(state.minute);
+    if (state) clockEl.innerHTML = formatClock(state);
     debugEl.textContent = [
       `fps        ${fps.toFixed(0)}`,
       `speed      ${speed}×  (actual ${state ? state.actualRate.toFixed(1) : '0.0'}×)`,
@@ -137,4 +154,4 @@ setSpeed(1);
 requestAnimationFrame(frame);
 
 // Expose for debugging in the console.
-window.mush = { camera, get state() { return state; }, setSpeed };
+window.mush = { camera, renderer, get state() { return state; }, setSpeed, worker };
