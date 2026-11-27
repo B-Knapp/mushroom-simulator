@@ -13,6 +13,7 @@
 // drawn live every frame.
 
 const SEG = 6;
+const TIP_STRIDE = 7; // x, y, angle, progress, rate, idle, id
 const BUCKETS = [
   { maxD: 0.75, w: 0.32, a: 0.42 },
   { maxD: 0.95, w: 0.44, a: 0.5 },
@@ -150,7 +151,8 @@ export class NetworkView {
     if (!resourceView) this.drawFans(ctx, cam, now, speed);
     else this.drawTipLines(ctx, cam, now, speed);
 
-    const G = resourceView ? 0 : this.glowSetting * (0.3 + 0.7 * night);
+    // Slider 0..1 maps to 0..1.5; by day the glow is about half its night strength.
+    const G = resourceView ? 0 : this.glowSetting * 1.5 * (0.5 + 0.5 * night);
     if (G > 0.01 && (this.edgeCount > 0 || this.tips)) this.drawGlow(ctx, cam, dpr, now, speed, G);
     this.drawSpore(ctx, cam.zoom, now);
   }
@@ -207,7 +209,7 @@ export class NetworkView {
     c.drawImage(this.haze2, 0, 0, W, H);
     c.drawImage(this.haze1, 0, 0, W, H);
 
-    this.renderRouteGlow(cam, dpr, W, H);
+    this.renderRouteGlow(cam, dpr, W, H, paths);
 
     c.setTransform(z, 0, 0, z, -cam.x * z, -cam.y * z);
     c.lineCap = 'round';
@@ -224,20 +226,26 @@ export class NetworkView {
   // Routes glow green by how much they carry. Baked at low resolution
   // (soft) whenever the cords are re-cached; scaled by the glow strength
   // when drawn.
-  renderRouteGlow(cam, dpr, W, H) {
+  renderRouteGlow(cam, dpr, W, H, paths) {
     const cv = this.routeGlow;
     const w = Math.max(1, Math.ceil(W * GLOW_RES)), h = Math.max(1, Math.ceil(H * GLOW_RES));
     if (cv.width !== w || cv.height !== h) { cv.width = w; cv.height = h; }
     const c = cv.getContext('2d');
     c.setTransform(1, 0, 0, 1, 0, 0);
     c.clearRect(0, 0, w, h);
-    if (!this.flowPaths) return;
     const z = cam.zoom * dpr * GLOW_RES;
     c.setTransform(z, 0, 0, z, -cam.x * z, -cam.y * z);
     c.lineCap = 'round';
     c.lineJoin = 'round';
     const px = 1 / z;
     c.globalCompositeOperation = 'lighter';
+    // A faint base glow on every cord, stronger on thicker ones.
+    for (let k = 0; k < BUCKETS.length; k++) {
+      c.strokeStyle = `rgba(60,255,140,${0.05 + 0.025 * k})`;
+      c.lineWidth = Math.max(2 * px, BUCKETS[k].w * 2 + 2);
+      c.stroke(paths[k]);
+    }
+    if (!this.flowPaths) return;
     for (let g = 0; g < FLOW_GROUPS; g++) {
       const f = (g + 1) / FLOW_GROUPS;
       c.strokeStyle = `rgba(40,255,120,${0.22 * f})`;
@@ -279,8 +287,7 @@ export class NetworkView {
     const vx0 = cam.x - 20, vy0 = cam.y - 20, vx1 = cam.x + cam.vw / z + 20, vy1 = cam.y + cam.vh / z + 20;
     const stem = new Path2D();
     const fans = [new Path2D(), new Path2D()];
-    for (let i = 0; i < t.length; i += 6) {
-      if (t[i + 5]) continue; // idle tips just end with their cord
+    for (let i = 0; i < t.length; i += TIP_STRIDE) {
       const x = t[i], y = t[i + 1];
       if (x < vx0 || x > vx1 || y < vy0 || y > vy1) continue;
       const ang = t[i + 2];
@@ -289,8 +296,10 @@ export class NetworkView {
       const ex = x + c * ext, ey = y + s * ext;
       stem.moveTo(x, y);
       stem.lineTo(ex, ey);
+      if (t[i + 5]) continue; // long-idle tips keep their stem but lose the fan
       // Fan of fine hyphae, the same shape for a tip from frame to frame.
-      let h = Math.imul((x * 73856093) ^ (y * 19349663), 0x9e3779b1) >>> 0;
+      // Fan shape follows the tip, so it doesn't reshuffle as the tip grows.
+      let h = Math.imul(t[i + 6] + 1, 0x9e3779b1) >>> 0;
       for (let k = 0; k < 11; k++) {
         h = Math.imul(h ^ (h >>> 13), 0x5bd1e995) >>> 0;
         const spread = ((h & 1023) / 1023 - 0.5) * 1.7;
@@ -320,8 +329,7 @@ export class NetworkView {
     if (!t || !t.length) return;
     const simHours = ((now - this.tipTime) / 1000) * speed;
     const p = new Path2D();
-    for (let i = 0; i < t.length; i += 6) {
-      if (t[i + 5]) continue;
+    for (let i = 0; i < t.length; i += TIP_STRIDE) {
       const ext = Math.min(SEG, t[i + 3] + t[i + 4] * simHours);
       p.moveTo(t[i], t[i + 1]);
       p.lineTo(t[i] + Math.cos(t[i + 2]) * ext, t[i + 1] + Math.sin(t[i + 2]) * ext);
@@ -344,7 +352,7 @@ export class NetworkView {
     const c = this.glow.getContext('2d');
     c.setTransform(1, 0, 0, 1, 0, 0);
     c.clearRect(0, 0, w, h);
-    if (this.flowPaths && this.routeGlow.width) {
+    if (this.routeGlow.width) {
       const sh = this.cacheShift || { k: 1, ox: 0, oy: 0 };
       c.globalAlpha = Math.min(1, G * breathe * 1.4);
       c.setTransform(sh.k, 0, 0, sh.k, sh.ox * GLOW_RES, sh.oy * GLOW_RES);
@@ -378,7 +386,7 @@ export class NetworkView {
     const t = this.tips;
     if (t && t.length) {
       const R = Math.max(7, 3 * px);
-      for (let i = 0; i < t.length; i += 6) {
+      for (let i = 0; i < t.length; i += TIP_STRIDE) {
         if (t[i + 5]) continue;
         const x = t[i], y = t[i + 1];
         if (x < vx0 || x > vx1 || y < vy0 || y > vy1) continue;

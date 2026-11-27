@@ -152,6 +152,8 @@ export function stepNetwork(net, rng, minute) {
     // long, thin supply line.
     tip.starved = net.pool < SEG_COST;
     tip.rate = tip.dormant || tip.starved ? 0 : BASE_SPEED * f * tip.eff; // units/hour
+    // How long it's been stalled, so brief stalls don't make it flicker.
+    tip.idleH = tip.rate === 0 ? (tip.idleH || 0) + dtH : 0;
     if (tip.rate === 0) continue;
 
     tip.acc += tip.rate * dtH;
@@ -428,11 +430,12 @@ export function networkSnapshot(net) {
     edgeA[k] = net.ea[e]; edgeB[k] = net.eb[e];
     edgeD[k] = net.eD[e]; edgeQ[k] = net.eQ[e];
   }
-  // Tips: x, y, angle, progress (units), rate (units/hour), idle flag.
+  // Tips: x, y, angle, progress (units), rate (units/hour), idle flag, id.
   const tipsArr = [];
   for (const t of net.tips) {
     if (t.dead) continue;
-    tipsArr.push(net.nx[t.node], net.ny[t.node], t.ang, t.acc, t.rate || 0, t.dormant || t.starved ? 1 : 0);
+    // Idle flag only for tips stalled for a while (dry soil or no food).
+    tipsArr.push(net.nx[t.node], net.ny[t.node], t.ang, t.acc, t.rate || 0, (t.idleH || 0) > 6 ? 1 : 0, t.id);
   }
   return {
     nodeX: net.nx.slice(0, net.nodeCount),
@@ -447,7 +450,7 @@ export function networkStats(net) {
   let active = 0, idle = 0;
   for (const t of net.tips) {
     if (t.dead) continue;
-    if (t.dormant || t.starved) idle++; else active++;
+    if ((t.idleH || 0) > 6) idle++; else active++;
   }
   return {
     nodes: net.nodeCount - net.deadNodes, edges: net.edgeCount - net.deadEdges,
