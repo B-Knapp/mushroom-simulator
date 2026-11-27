@@ -115,3 +115,6 @@ button.active {
 }
 #hint.hidden { opacity: 0; }
 #hint.warn { color: #f3c48b; }
+
+.glow { display: flex; align-items: center; gap: 6px; margin-left: 6px; color: #d8c9ad; }
+.glow input { width: 90px; accent-color: #8dffb8; }

@@ -98,8 +98,21 @@ document.getElementById('newWorld').addEventListener('click', () => startWorld(r
 document.getElementById('rain').addEventListener('click', () => worker.postMessage({ type: 'rain', hours: 8 }));
 resBtn.addEventListener('click', () => setResourceView(!renderer.resourceView));
 
+// Glow strength, remembered between visits.
+const glowEl = document.getElementById('glow');
+try {
+  const saved = localStorage.getItem('mushroom.glow');
+  if (saved !== null) glowEl.value = saved;
+} catch { /* storage unavailable */ }
+const applyGlow = () => {
+  renderer.network.glowSetting = glowEl.value / 100;
+  try { localStorage.setItem('mushroom.glow', glowEl.value); } catch { /* ignore */ }
+};
+glowEl.addEventListener('input', applyGlow);
+applyGlow();
+
 window.addEventListener('keydown', (e) => {
-  if (e.target.tagName === 'INPUT') return;
+  if (e.target.tagName === 'INPUT' && e.target.type !== 'range') return;
   if (e.code === 'Space') { e.preventDefault(); togglePause(); }
   else if (e.key === '1') { lastNonZero = 1; setSpeed(1); }
   else if (e.key === '2') { lastNonZero = 10; setSpeed(10); }

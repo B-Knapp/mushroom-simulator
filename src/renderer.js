@@ -77,7 +77,14 @@ export class Renderer {
       ctx.drawImage(this.overlays.wet.canvas, 0, 0, WORLD_W, WORLD_H);
     }
 
-    this.network.draw(ctx, cam, this.resourceView, now, dpr, state ? state.speed : 0);
+    // Day and night: the world dims after dusk (which also lets the glow show).
+    const night = state ? nightFactor(state.minute) : 0;
+    if (!this.resourceView && night > 0.01) {
+      ctx.fillStyle = `rgba(6,9,18,${0.32 * night})`;
+      ctx.fillRect(0, 0, WORLD_W, WORLD_H);
+    }
+
+    this.network.draw(ctx, cam, this.resourceView, now, dpr, state ? state.speed : 0, night);
 
     if (state && state.raining) this.drawRain(state, now);
 
@@ -114,6 +121,14 @@ export class Renderer {
     }
     ctx.stroke();
   }
+}
+
+// 0 at midday, 1 through the night, with soft dawn and dusk.
+function nightFactor(minute) {
+  const hour = (minute % 1440) / 60;
+  const sun = Math.sin(((hour - 6) / 12) * Math.PI); // > 0 between 6:00 and 18:00
+  const t = Math.max(0, Math.min(1, (sun + 0.15) / 0.5));
+  return 1 - t * t * (3 - 2 * t);
 }
 
 function surfaceAt(w, gx) {
