@@ -4,6 +4,7 @@ import { randomSeed } from './rng.js';
 import { Camera, attachCameraInput } from './camera.js';
 import { Renderer } from './renderer.js';
 import { bakeWorld } from './render/soil.js';
+import { loadAssets } from './render/assets.js';
 
 const canvas = document.getElementById('view');
 const clockEl = document.getElementById('clock');
@@ -123,7 +124,11 @@ worker.onmessage = (e) => {
   const d = e.data;
   if (d.seed !== seed) return; // stale message from a previous world
   if (d.type === 'state') state = d;
-  else if (d.type === 'world') renderer.setWorld(d, bakeWorld(d));
+  else if (d.type === 'world') {
+    loadAssets().then((assets) => {
+      if (d.seed === seed) renderer.setWorld(d, bakeWorld(d, assets));
+    });
+  }
   else if (d.type === 'grids') renderer.updateGrids(d.moisture, d.nutrient);
   else if (d.type === 'network') renderer.setNetwork(d);
   else if (d.type === 'decay') renderer.updateDecay(d.eaten, d.colon);

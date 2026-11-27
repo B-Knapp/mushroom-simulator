@@ -4,10 +4,10 @@
 // (wetness, decay, the network, overlays) are drawn on top.
 
 import { WORLD_W, WORLD_H, CELL, GW, GH } from '../config.js';
-import { SOIL, AIR, ROCK, WOOD, LITTER, SAND } from '../soilTypes.js';
+import { SOIL, AIR, ROCK, WOOD, LITTER, SAND, LOAM, CLAY_LOAM, CLAY } from '../soilTypes.js';
 import { makeRng, subSeed } from '../rng.js';
 
-export function bakeWorld(w) {
+export function bakeWorld(w, assets = {}) {
   const rng = makeRng(subSeed(w.seed, 'paint'));
   const c = document.createElement('canvas');
   c.width = WORLD_W;
@@ -21,8 +21,10 @@ export function bakeWorld(w) {
   const groundY = (wx) => w.ground[Math.min(GW - 1, Math.max(0, Math.floor(wx / CELL)))] * CELL;
   const litterY = (wx) => w.litterTop[Math.min(GW - 1, Math.max(0, Math.floor(wx / CELL)))] * CELL;
 
-  paintForest(ctx, rng, litterY);
+  if (assets.forest) paintForestPhoto(ctx, assets.forest, litterY);
+  else paintForest(ctx, rng, litterY);
   paintSoilLayers(ctx, w);
+  const textured = paintSoilTextures(ctx, w, assets);
 
   // Everything below the litter top: clip so soil effects stay in the soil.
   const soilClip = new Path2D();
@@ -33,14 +35,14 @@ export function bakeWorld(w) {
 
   ctx.save();
   ctx.clip(soilClip);
-  paintMottling(ctx, rng);
-  paintSand(ctx, w);
-  paintGrain(ctx, rng, typeAt);
+  paintMottling(ctx, rng, textured ? 0.5 : 1);
+  if (!textured) paintSand(ctx, w);
+  paintGrain(ctx, rng, typeAt, textured ? 0.25 : 1);
   paintRoots(ctx, rng, groundY, typeAt);
   paintDepthShade(ctx, groundY);
   ctx.restore();
 
-  paintRocks(ctx, rng, w);
+  paintRocks(ctx, rng, w, assets.gravel);
   paintLitter(ctx, rng, w, typeAt);
   paintSprigs(ctx, rng, w, typeAt);
 
@@ -50,8 +52,8 @@ export function bakeWorld(w) {
   wood.width = WORLD_W;
   wood.height = WORLD_H;
   const wctx = wood.getContext('2d');
-  for (const f of w.foods) if (f.kind === 'branch') paintBranch(wctx, rng, f);
-  for (const f of w.foods) if (f.kind === 'log') paintLog(wctx, rng, f);
+  for (const f of w.foods) if (f.kind === 'branch') paintBranch(wctx, rng, f, assets);
+  for (const f of w.foods) if (f.kind === 'log') paintLog(wctx, rng, f, assets);
   const leaves = pileLeaves(rng, w, typeAt);
   return { base: c, food: new FoodLayer(wood, leaves) };
 }
@@ -139,6 +141,118 @@ function paintForest(ctx, rng, litterY) {
   ctx.fillRect(0, bottom - 60, WORLD_W, 60);
 }
 
+// The forest photo, cropped to its trunks and undergrowth, laid along the
+// strip above ground and mirrored on alternate tiles so it doesn't seam.
+function paintForestPhoto(ctx, img, litterY) {
+  const bandH = 36 * CELL;
+  ctx.fillStyle = '#141311';
+  ctx.fillRect(0, 0, WORLD_W, WORLD_H);
+  const sy = img.height * 0.3, sh = img.height * 0.42;
+  const scale = bandH / sh;
+  const tileW = img.width * scale;
+  for (let i = 0, x = 0; x < WORLD_W; i++, x += tileW) {
+    ctx.save();
+    if (i % 2) {
+      ctx.translate(x + tileW, 0);
+      ctx.scale(-1, 1);
+      ctx.drawImage(img, 0, sy, img.width, sh, 0, 0, tileW, bandH);
+    } else {
+      ctx.drawImage(img, 0, sy, img.width, sh, x, 0, tileW, bandH);
+    }
+    ctx.restore();
+  }
+  // Push it back: darker and slightly warm, fading into the ground haze.
+  ctx.fillStyle = 'rgba(20,16,12,0.45)';
+  ctx.fillRect(0, 0, WORLD_W, bandH);
+  const haze = ctx.createLinearGradient(0, bandH * 0.55, 0, bandH);
+  haze.addColorStop(0, 'rgba(48,40,30,0)');
+  haze.addColorStop(1, 'rgba(48,40,30,0.4)');
+  ctx.fillStyle = haze;
+  ctx.fillRect(0, bandH * 0.55, WORLD_W, bandH * 0.45);
+}
+
+// Photo textures per soil type, masked to where that soil is, over the flat
+// colors (which stay as a fallback and tint). Returns true if anything was
+// textured.
+function paintSoilTextures(ctx, w, assets) {
+  const plan = [
+    { types: [LOAM], img: assets.humus, scale: 0.32, alpha: 0.9, lift: 'rgba(120,86,58,0.32)' },
+    { types: [CLAY_LOAM], img: assets.humus, scale: 0.36, alpha: 0.75, lift: 'rgba(110,78,52,0.4)', blend: assets.clay, blendAlpha: 0.22 },
+    { types: [CLAY], img: assets.clay, scale: 0.4, alpha: 0.55, desat: 0.65, tint: 'rgba(70,48,32,0.5)' },
+    { types: [SAND], img: assets.gravel, scale: 0.26, alpha: 0.7, tint: 'rgba(170,150,130,0.6)' },
+  ];
+  let any = false;
+  const tmp = document.createElement('canvas');
+  tmp.width = WORLD_W;
+  tmp.height = WORLD_H;
+  const t = tmp.getContext('2d');
+  for (const p of plan) {
+    if (!p.img) continue;
+    any = true;
+    t.globalCompositeOperation = 'copy';
+    t.globalAlpha = 1;
+    t.fillStyle = pattern(t, p.img, p.scale);
+    t.fillRect(0, 0, WORLD_W, WORLD_H);
+    t.globalCompositeOperation = 'source-over';
+    if (p.blend) {
+      t.globalAlpha = p.blendAlpha;
+      t.fillStyle = pattern(t, p.blend, p.scale * 1.3);
+      t.fillRect(0, 0, WORLD_W, WORLD_H);
+      t.globalAlpha = 1;
+    }
+    if (p.desat) {
+      t.globalCompositeOperation = 'saturation';
+      t.fillStyle = `rgba(128,128,128,${p.desat})`;
+      t.fillRect(0, 0, WORLD_W, WORLD_H);
+    }
+    if (p.lift) {
+      t.globalCompositeOperation = 'screen';
+      t.fillStyle = p.lift;
+      t.fillRect(0, 0, WORLD_W, WORLD_H);
+    }
+    if (p.tint) {
+      t.globalCompositeOperation = 'multiply';
+      t.fillStyle = p.tint;
+      t.fillRect(0, 0, WORLD_W, WORLD_H);
+    }
+    // Keep only where this soil is (soft-edged, from the cell grid).
+    t.globalCompositeOperation = 'destination-in';
+    t.imageSmoothingEnabled = true;
+    t.drawImage(typeMask(w, p.types), 0, 0, WORLD_W, WORLD_H);
+    t.globalCompositeOperation = 'source-over';
+    ctx.globalAlpha = p.alpha;
+    ctx.drawImage(tmp, 0, 0);
+    ctx.globalAlpha = 1;
+  }
+  return any;
+}
+
+function pattern(ctx, img, scale) {
+  const pat = ctx.createPattern(img, 'repeat');
+  pat.setTransform(new DOMMatrix().scale(scale));
+  return pat;
+}
+
+// A GW x GH canvas, opaque where the cell is one of `types` (rocks and wood
+// count as whatever is beside them, since they're drawn on top).
+function typeMask(w, types) {
+  const c = document.createElement('canvas');
+  c.width = GW;
+  c.height = GH;
+  const x2 = c.getContext('2d');
+  const img = x2.createImageData(GW, GH);
+  for (let y = 0; y < GH; y++) {
+    let prev = AIR;
+    for (let x = 0; x < GW; x++) {
+      let t = w.cellType[y * GW + x];
+      if (t === ROCK || t === WOOD) t = prev; else prev = t;
+      img.data[(y * GW + x) * 4 + 3] = types.includes(t) ? 255 : 0;
+    }
+  }
+  x2.putImageData(img, 0, 0);
+  return c;
+}
+
 // --- Soil ---------------------------------------------------------------------------
 
 function paintSoilLayers(ctx, w) {
@@ -168,8 +282,8 @@ function paintSoilLayers(ctx, w) {
 }
 
 // Large soft blotches of lighter and darker earth.
-function paintMottling(ctx, rng) {
-  for (let k = 0; k < 900; k++) {
+function paintMottling(ctx, rng, amount) {
+  for (let k = 0; k < 900 * amount; k++) {
     const x = rng() * WORLD_W, y = 100 + rng() * (WORLD_H - 100);
     const r = 12 + rng() * 70;
     const dark = rng() < 0.55;
@@ -195,8 +309,8 @@ function paintSand(ctx, w) {
   }
 }
 
-function paintGrain(ctx, rng, typeAt) {
-  const n = Math.floor((WORLD_W * WORLD_H) / 30);
+function paintGrain(ctx, rng, typeAt, amount) {
+  const n = Math.floor((WORLD_W * WORLD_H * amount) / 30);
   for (let k = 0; k < n; k++) {
     const x = rng() * WORLD_W, y = rng() * WORLD_H;
     const t = typeAt(x, y);
@@ -210,7 +324,7 @@ function paintGrain(ctx, rng, typeAt) {
     ctx.fillRect(x, y, s, s);
   }
   // Small pebbles for texture (not simulated), lightly shaded.
-  for (let k = 0; k < 260; k++) {
+  for (let k = 0; k < 260 * amount; k++) {
     const x = rng() * WORLD_W, y = rng() * WORLD_H;
     const t = typeAt(x, y);
     if (t === AIR || t === LITTER || t === ROCK || t === WOOD) continue;
@@ -268,10 +382,10 @@ function paintDepthShade(ctx, groundY) {
 
 // --- Rocks ---------------------------------------------------------------------------
 
-function paintRocks(ctx, rng, w) {
+function paintRocks(ctx, rng, w, gravel) {
   for (const poly of w.rocks) {
     const [cx, cy, r] = polyCircle(poly, CELL);
-    const hue = 28 + rng() * 16, sat = 4 + rng() * 8, lit = 38 + rng() * 14;
+    const hue = 28 + rng() * 16, sat = 5 + rng() * 8, lit = 24 + rng() * 10;
     // Contact shadow.
     ctx.fillStyle = 'rgba(15,9,4,0.35)';
     ctx.beginPath();
@@ -286,6 +400,18 @@ function paintRocks(ctx, rng, w) {
     ctx.fill();
     ctx.save();
     ctx.clip();
+    if (gravel) {
+      // Stone grain from the gravel photo, grayed and laid over the shading.
+      ctx.globalCompositeOperation = 'overlay';
+      ctx.globalAlpha = 0.85;
+      ctx.fillStyle = pattern(ctx, gravel, 0.18);
+      ctx.fillRect(cx - r * 1.3, cy - r * 1.3, r * 2.6, r * 2.6);
+      ctx.globalAlpha = 1;
+      ctx.globalCompositeOperation = 'saturation';
+      ctx.fillStyle = 'rgba(128,128,128,0.75)';
+      ctx.fillRect(cx - r * 1.3, cy - r * 1.3, r * 2.6, r * 2.6);
+      ctx.globalCompositeOperation = 'source-over';
+    }
     // Speckles and a few fracture lines.
     for (let k = 0; k < r * 3; k++) {
       ctx.fillStyle = rng() < 0.5 ? `hsla(${hue}, 8%, ${lit - 20}%, 0.35)` : `hsla(${hue}, 8%, ${lit + 22}%, 0.3)`;
@@ -412,7 +538,7 @@ function drawLeafP(ctx, L) {
 
 // --- Wood ------------------------------------------------------------------------------
 
-function paintBranch(ctx, rng, f) {
+function paintBranch(ctx, rng, f, assets) {
   const p = f.poly;
   // Axis from the midpoints of the short sides.
   const ax = ((p[0] + p[6]) / 2) * CELL, ay = ((p[1] + p[7]) / 2) * CELL;
@@ -430,7 +556,21 @@ function paintBranch(ctx, rng, f) {
   ctx.fillStyle = g;
   ctx.fill();
   ctx.clip();
-  for (let k = 0; k < 10; k++) {
+  if (assets.bark) {
+    ctx.fillStyle = barkPattern(ctx, assets.bark, 0.045);
+    ctx.fillRect(0, -thick / 2, len, thick);
+    ctx.globalCompositeOperation = 'screen';
+    ctx.fillStyle = 'rgba(80,58,36,0.55)';
+    ctx.fillRect(0, -thick / 2, len, thick);
+    ctx.globalCompositeOperation = 'multiply';
+    const sh = ctx.createLinearGradient(0, -thick / 2, 0, thick / 2);
+    sh.addColorStop(0, 'rgb(255,248,235)');
+    sh.addColorStop(1, 'rgb(90,72,55)');
+    ctx.fillStyle = sh;
+    ctx.fillRect(0, -thick / 2, len, thick);
+    ctx.globalCompositeOperation = 'source-over';
+  }
+  for (let k = 0; k < (assets.bark ? 0 : 10); k++) {
     const y = (rng() - 0.5) * thick * 0.8;
     ctx.strokeStyle = rng() < 0.6 ? 'rgba(25,14,5,0.5)' : 'rgba(160,120,80,0.35)';
     ctx.lineWidth = 0.6 + rng() * 0.8;
@@ -443,7 +583,7 @@ function paintBranch(ctx, rng, f) {
   ctx.restore();
 }
 
-function paintLog(ctx, rng, f) {
+function paintLog(ctx, rng, f, assets) {
   const x = f.x0 * CELL, y = f.top * CELL;
   const lw = (f.x1 - f.x0) * CELL, lh = (f.bottom + 1 - f.top) * CELL;
   const r = Math.min(lh / 2, 16);
@@ -467,8 +607,23 @@ function paintLog(ctx, rng, f) {
   ctx.fill();
   ctx.clip();
 
+  if (assets.bark) {
+    // Bark texture, ridges running along the log, shaded round.
+    ctx.fillStyle = barkPattern(ctx, assets.bark, 0.065);
+    ctx.fillRect(x, y, lw, lh);
+    ctx.globalCompositeOperation = 'multiply';
+    const shade = ctx.createLinearGradient(0, y, 0, y + lh);
+    shade.addColorStop(0, 'rgb(190,178,160)');
+    shade.addColorStop(0.22, 'rgb(255,248,235)');
+    shade.addColorStop(0.6, 'rgb(205,188,165)');
+    shade.addColorStop(1, 'rgb(70,56,42)');
+    ctx.fillStyle = shade;
+    ctx.fillRect(x, y, lw, lh);
+    ctx.globalCompositeOperation = 'source-over';
+  }
+
   // Bark plates and furrows running along the log.
-  for (let k = 0; k < 90; k++) {
+  for (let k = 0; k < (assets.bark ? 0 : 90); k++) {
     const fy = y + 2 + rng() * (lh - 4);
     const fx = x + rng() * lw;
     const flen = 20 + rng() * 90;
@@ -487,8 +642,26 @@ function paintLog(ctx, rng, f) {
   hl.addColorStop(1, 'rgba(210,180,140,0)');
   ctx.fillStyle = hl;
   ctx.fillRect(x, y, lw, lh * 0.35);
-  // Moss on top.
-  for (let k = 0; k < lw / 2; k++) {
+  // Moss on top: a ragged band of moss texture, or dabs without it.
+  if (assets.moss) {
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    for (let mx = x; mx <= x + lw; mx += 6) ctx.lineTo(mx, y + lh * (0.12 + rng() * 0.16) + Math.sin(mx / 37) * 3);
+    ctx.lineTo(x + lw, y);
+    ctx.closePath();
+    ctx.clip();
+    ctx.fillStyle = pattern(ctx, assets.moss, 0.12);
+    ctx.globalAlpha = 0.9;
+    ctx.fillRect(x, y, lw, lh * 0.4);
+    ctx.globalAlpha = 1;
+    ctx.globalCompositeOperation = 'multiply';
+    ctx.fillStyle = 'rgb(150,160,120)';
+    ctx.fillRect(x, y, lw, lh * 0.4);
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.restore();
+  }
+  for (let k = 0; k < (assets.moss ? lw / 8 : lw / 2); k++) {
     const mx = x + rng() * lw;
     const my = y + 1 + Math.pow(rng(), 2) * lh * 0.35;
     ctx.fillStyle = `hsla(${70 + rng() * 30}, ${25 + rng() * 20}%, ${20 + rng() * 12}%, ${0.55 + rng() * 0.3})`;
@@ -501,6 +674,23 @@ function paintLog(ctx, rng, f) {
   // Cut ends showing growth rings.
   for (const ex of [x + r * 0.55, x + lw - r * 0.55]) {
     const cy = y + lh / 2, rx = r * 0.55, ry = lh / 2 - 1;
+    if (assets.endGrain) {
+      const g = assets.endGrain, inset = g.width * 0.07;
+      ctx.save();
+      ctx.beginPath();
+      ctx.ellipse(ex, cy, rx, ry, 0, 0, Math.PI * 2);
+      ctx.clip();
+      ctx.drawImage(g, inset, inset, g.width - inset * 2, g.height - inset * 2, ex - rx, cy - ry, rx * 2, ry * 2);
+      ctx.fillStyle = 'rgba(60,40,22,0.35)';
+      ctx.fill();
+      ctx.restore();
+      ctx.strokeStyle = 'rgba(30,18,8,0.8)';
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      ctx.ellipse(ex, cy, rx, ry, 0, 0, Math.PI * 2);
+      ctx.stroke();
+      continue;
+    }
     ctx.fillStyle = '#9c7a52';
     ctx.beginPath();
     ctx.ellipse(ex, cy, rx, ry, 0, 0, Math.PI * 2);
@@ -554,6 +744,13 @@ function paintSprigs(ctx, rng, w, typeAt) {
 }
 
 // --- Helpers ---------------------------------------------------------------------------
+
+// Bark texture turned sideways so its ridges run along a lying log.
+function barkPattern(ctx, img, scale) {
+  const pat = ctx.createPattern(img, 'repeat');
+  pat.setTransform(new DOMMatrix().rotate(90).scale(scale));
+  return pat;
+}
 
 function tracePoly(ctx, poly, s) {
   ctx.beginPath();

@@ -49,3 +49,12 @@ src/render/network.js   draws cords by thickness, flow pulses and smoothly growi
 src/sim/worker.js   simulation loop and state
 src/main.js         wiring, UI, frame loop
 ```
+
+## Art credits
+
+Textures and photos in `assets/` (resized for the web):
+
+- Tree bark: CC0, [GenPBR](https://genpbr.com/materials/tree-bark)
+- Wood end grain slice: CC0, [cc0materials.com](https://cc0materials.com/materials/wood-end-grain-slice)
+- Soil textures (forest humus, red clay, gravel dirt, mossy ground): supplied by the project owner
+- Forest backdrop photo: by haberdoedas on [Unsplash](https://unsplash.com)
