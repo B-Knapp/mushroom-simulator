@@ -71,6 +71,7 @@ function setResourceView(on) {
 // ---- Planting ----
 
 let hintTimer = 0;
+let lastPlant = null;
 function showHint(text, warn = false) {
   hintEl.textContent = text;
   hintEl.classList.toggle('warn', warn);
@@ -81,6 +82,7 @@ function showHint(text, warn = false) {
 function onTap(sx, sy) {
   if (!state || state.net.spore !== 'none') return;
   const [x, y] = camera.screenToWorld(sx, sy);
+  lastPlant = [x, y];
   worker.postMessage({ type: 'plant', x, y });
 }
 
@@ -101,12 +103,12 @@ resBtn.addEventListener('click', () => setResourceView(!renderer.resourceView));
 // Glow strength, remembered between visits.
 const glowEl = document.getElementById('glow');
 try {
-  const saved = localStorage.getItem('mushroom.glow');
+  const saved = localStorage.getItem('mushroom.glow2');
   if (saved !== null) glowEl.value = saved;
 } catch { /* storage unavailable */ }
 const applyGlow = () => {
   renderer.network.glowSetting = glowEl.value / 100;
-  try { localStorage.setItem('mushroom.glow', glowEl.value); } catch { /* ignore */ }
+  try { localStorage.setItem('mushroom.glow2', glowEl.value); } catch { /* ignore */ }
 };
 glowEl.addEventListener('input', applyGlow);
 applyGlow();
@@ -147,6 +149,8 @@ worker.onmessage = (e) => {
   else if (d.type === 'decay') renderer.updateDecay(d.eaten, d.colon);
   else if (d.type === 'planted') {
     if (d.ok) {
+      // Fly in close: the colony starts tiny.
+      if (lastPlant) camera.flyTo(lastPlant[0], lastPlant[1], 3.5);
       showHint('Spore planted. It will germinate once the soil is damp.');
       hintTimer = setTimeout(() => hintEl.classList.add('hidden'), 4000);
     } else {
@@ -164,6 +168,7 @@ let fpsT = performance.now();
 let uiT = 0;
 
 function frame(now) {
+  camera.update(now);
   renderer.draw(state, now);
 
   frames++;

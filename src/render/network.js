@@ -18,6 +18,8 @@
 // instead of appearing a segment at a time. Cords finished since the last
 // cache are drawn live until the next one.
 
+import { HyphalMat } from './mat.js';
+
 const SEG = 6;
 const TIP_STRIDE = 8; // x, y, angle, progress, rate, idle, id, segment start
 const BUCKETS = [
@@ -47,7 +49,8 @@ export class NetworkView {
     this.sprite = makeSprite();
     this.phase = 0;
     this.lastNow = 0;
-    this.glowSetting = 0.6;
+    this.glowSetting = 0;
+    this.mat = new HyphalMat();
     this.clear();
   }
 
@@ -64,6 +67,8 @@ export class NetworkView {
     this.simT = undefined;
     this.fronts = null;
     this.stemLen = null;
+    this.matT = -Infinity;
+    if (this.mat) this.mat.clear();
     this.dirty = true;
     // Nothing from the previous world may linger in the glow.
     this.routeGlow.width = 0;
@@ -116,9 +121,13 @@ export class NetworkView {
 
     this.segs = segs;
     this.bucket = bucket;
+    this.joints = buildJoints(x.length, a, b, n);
     this.edgeCount = n;
     this.flowPaths = qTop > 0 ? flowPaths : null;
     this.motes = motes;
+    this.D = D;
+    this.nodeX = x;
+    this.nodeY = y;
     this.t0 = snap.edgeT0;
     this.t1 = snap.edgeT1;
     this.owner = snap.edgeOwner;
@@ -134,6 +143,8 @@ export class NetworkView {
     this.lastNow = now;
     this.phase += dt * (speed > 0 ? 0.35 * Math.pow(speed, 0.3) : 0.05);
     this.tickClock(state, now, dt, speed);
+    this.growMat();
+    if (!resourceView) this.mat.draw(ctx);
 
     if (this.edgeCount > 0) {
       const W = ctx.canvas.width, H = ctx.canvas.height;
@@ -176,6 +187,19 @@ export class NetworkView {
     const G = resourceView ? 0 : this.glowSetting * 1.5 * (0.5 + 0.5 * night);
     if (G > 0.01 && (this.edgeCount > 0 || this.tips)) this.drawGlow(ctx, cam, dpr, now, speed, G);
     this.drawSpore(ctx, cam.zoom, now);
+  }
+
+  // Cords that have finished growing on screen since last time lay down
+  // their hyphae; the mat ages with simulated time.
+  growMat() {
+    if (!this.edgeCount || this.simT === undefined) return;
+    const T = Math.min(this.simT, this.snapMinute);
+    if (T <= this.matT) { this.mat.age(this.simT); return; }
+    const t1 = this.t1, list = [];
+    for (let e = 0; e < this.edgeCount; e++) if (t1[e] > this.matT && t1[e] <= T) list.push(e);
+    this.matT = T;
+    this.mat.deposit(list, this.segs, this.D);
+    this.mat.age(this.simT);
   }
 
   // --- Display clock ----------------------------------------------------------------
@@ -306,13 +330,28 @@ export class NetworkView {
     const T = this.simT === undefined ? Infinity : this.simT;
     this.cacheSimT = T;
     const t1 = this.t1;
-    for (let e = 0; e < this.edgeCount; e++) {
-      if (t1 && t1[e] > T) continue;
-      const ax = sg[e * 4], ay = sg[e * 4 + 1], bx = sg[e * 4 + 2], by = sg[e * 4 + 3];
-      if ((ax < x0 && bx < x0) || (ax > x1 && bx > x1) || (ay < y0 && by < y0) || (ay > y1 && by > y1)) continue;
-      const p = paths[bk[e]];
-      p.moveTo(ax, ay);
-      p.lineTo(bx, by);
+    // Each cord is drawn as two halves meeting at its middle. Where exactly
+    // two cords meet at a node, the two halves become one smooth curve
+    // through the node, so cords bend instead of zigzagging.
+    const J = this.joints;
+    const done = (e) => !t1 || t1[e] <= T;
+    const mid = (e, k) => (sg[e * 4 + k] + sg[e * 4 + k + 2]) / 2;
+    for (let j = 0; j < J.length; j += 3) {
+      const v = J[j], e1 = J[j + 1], e2 = J[j + 2];
+      const vx = this.nodeX[v], vy = this.nodeY[v];
+      if (vx < x0 || vx > x1 || vy < y0 || vy > y1) continue;
+      if (e2 >= 0 && done(e1) && done(e2)) {
+        const p = paths[Math.max(bk[e1], bk[e2])];
+        p.moveTo(mid(e1, 0), mid(e1, 1));
+        p.quadraticCurveTo(vx, vy, mid(e2, 0), mid(e2, 1));
+        continue;
+      }
+      for (const e of e2 >= 0 ? [e1, e2] : [e1]) {
+        if (!done(e)) continue;
+        const p = paths[bk[e]];
+        p.moveTo(vx, vy);
+        p.lineTo(mid(e, 0), mid(e, 1));
+      }
     }
 
     if (glowView) {
@@ -335,8 +374,8 @@ export class NetworkView {
 
     // Cotton: two soft hazes drawn small and scaled up (that's the blur),
     // then the cream cords on top.
-    this.haze(this.haze1, 0.25, paths, cam, dpr, 3.2, 2.5, 0.13, W, H);
-    this.haze(this.haze2, 0.125, paths, cam, dpr, 7, 5, 0.07, W, H);
+    this.haze(this.haze1, 0.25, paths, cam, dpr, 3.2, 2.5, 0.09, W, H);
+    this.haze(this.haze2, 0.125, paths, cam, dpr, 7, 5, 0.05, W, H);
     c.imageSmoothingEnabled = true;
     c.drawImage(this.haze2, 0, 0, W, H);
     c.drawImage(this.haze1, 0, 0, W, H);
@@ -348,7 +387,7 @@ export class NetworkView {
     c.lineJoin = 'round';
     for (let k = 0; k < BUCKETS.length; k++) {
       const b = BUCKETS[k];
-      c.strokeStyle = `rgba(248,244,236,${b.a})`;
+      c.strokeStyle = `rgba(242,234,218,${b.a * 0.9})`;
       c.lineWidth = Math.max(b.w * 0.85, (0.4 + 0.07 * k) / cam.zoom);
       c.stroke(paths[k]);
     }
@@ -427,26 +466,31 @@ export class NetworkView {
       if (P[k + 6]) continue; // long-idle tips keep their stem but lose the fan
       // Fan shape follows the tip, so it doesn't reshuffle as the tip grows.
       let h = Math.imul(t[i + 6] + 1, 0x9e3779b1) >>> 0;
-      for (let f = 0; f < 11; f++) {
+      for (let f = 0; f < 34; f++) {
         h = Math.imul(h ^ (h >>> 13), 0x5bd1e995) >>> 0;
-        const spread = ((h & 1023) / 1023 - 0.5) * 1.7;
-        const len = 4 + ((h >>> 10) & 63) / 63 * 7;
-        const bend = (((h >>> 16) & 255) / 255 - 0.5) * 0.6;
+        const spread = ((h & 1023) / 1023 - 0.5) * 2.4;
+        const q = ((h >>> 10) & 63) / 63;
+        // Longest straight ahead, shorter to the sides: a rounded fan.
+        const len = (4 + q * 20) * (1 - 0.45 * Math.abs(spread) / 1.2);
+        const bend = (((h >>> 16) & 255) / 255 - 0.5) * 0.9;
         const a1 = ang + spread, a2 = a1 + bend;
         const p = fans[f & 1];
-        p.moveTo(ex, ey);
-        p.quadraticCurveTo(ex + Math.cos(a1) * len * 0.55, ey + Math.sin(a1) * len * 0.55,
-          ex + Math.cos(a2) * len, ey + Math.sin(a2) * len);
+        // Hairs leave from along the last stretch of the tip, not one point.
+        const back = (((h >>> 24) & 255) / 255) * 7;
+        const ox = ex - Math.cos(ang) * back, oy = ey - Math.sin(ang) * back;
+        p.moveTo(ox, oy);
+        p.quadraticCurveTo(ox + Math.cos(a1) * len * 0.55, oy + Math.sin(a1) * len * 0.55,
+          ox + Math.cos(a2) * len, oy + Math.sin(a2) * len);
       }
     }
     ctx.lineCap = 'round';
     ctx.strokeStyle = 'rgba(248,244,236,0.6)';
     ctx.lineWidth = Math.max(0.35, 0.6 / z);
     ctx.stroke(stem);
-    ctx.lineWidth = Math.max(0.2, 0.4 / z);
-    ctx.strokeStyle = 'rgba(248,244,236,0.32)';
+    ctx.lineWidth = Math.max(0.16, 0.35 / z);
+    ctx.strokeStyle = 'rgba(248,244,236,0.22)';
     ctx.stroke(fans[0]);
-    ctx.strokeStyle = 'rgba(248,244,236,0.18)';
+    ctx.strokeStyle = 'rgba(248,244,236,0.11)';
     ctx.stroke(fans[1]);
   }
 
@@ -565,4 +609,26 @@ function makeSprite() {
   x.fillStyle = g;
   x.fillRect(0, 0, 32, 32);
   return c;
+}
+
+// Joints for drawing: for each node, either one smooth pair (node, e1, e2)
+// when exactly two cords meet there, or one entry per cord (node, e, -1).
+function buildJoints(nNodes, ea, eb, n) {
+  const deg = new Uint16Array(nNodes);
+  for (let e = 0; e < n; e++) { deg[ea[e]]++; deg[eb[e]]++; }
+  const first = new Int32Array(nNodes).fill(-1), second = new Int32Array(nNodes).fill(-1);
+  for (let e = 0; e < n; e++) {
+    for (const v of [ea[e], eb[e]]) {
+      if (deg[v] !== 2) continue;
+      if (first[v] < 0) first[v] = e; else second[v] = e;
+    }
+  }
+  const out = [];
+  for (let e = 0; e < n; e++) {
+    for (const v of [ea[e], eb[e]]) {
+      if (deg[v] === 2) { if (first[v] === e && second[v] >= 0) out.push(v, e, second[v]); }
+      else out.push(v, e, -1);
+    }
+  }
+  return Int32Array.from(out);
 }

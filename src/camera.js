@@ -36,6 +36,7 @@ export class Camera {
   }
 
   fit() {
+    this.anim = null;
     this.zoom = this.fitZoom();
     this.x = (WORLD_W - this.vw / this.zoom) / 2;
     this.y = (WORLD_H - this.vh / this.zoom) / 2;
@@ -45,13 +46,36 @@ export class Camera {
     return [this.x + sx / this.zoom, this.y + sy / this.zoom];
   }
 
+  // Glide to center (wx, wy) at the given zoom. Any user pan or zoom cancels it.
+  flyTo(wx, wy, zoom, ms = 1400) {
+    this.anim = { x0: this.x, y0: this.y, z0: this.zoom, wx, wy, z1: Math.min(MAX_ZOOM, zoom), t0: performance.now(), ms };
+  }
+
+  update(now) {
+    const a = this.anim;
+    if (!a) return;
+    const u = Math.min(1, (now - a.t0) / a.ms);
+    const e = u < 0.5 ? 4 * u * u * u : 1 - Math.pow(-2 * u + 2, 3) / 2;
+    // Zoom geometrically so the move feels even.
+    const z = a.z0 * Math.pow(a.z1 / a.z0, e);
+    const cx0 = a.x0 + this.vw / a.z0 / 2, cy0 = a.y0 + this.vh / a.z0 / 2;
+    const cx = cx0 + (a.wx - cx0) * e, cy = cy0 + (a.wy - cy0) * e;
+    this.zoom = z;
+    this.x = cx - this.vw / z / 2;
+    this.y = cy - this.vh / z / 2;
+    this.clamp();
+    if (u >= 1) this.anim = null;
+  }
+
   panBy(dxScreen, dyScreen) {
+    this.anim = null;
     this.x -= dxScreen / this.zoom;
     this.y -= dyScreen / this.zoom;
     this.clamp();
   }
 
   zoomAt(sx, sy, factor) {
+    this.anim = null;
     const [wx, wy] = this.screenToWorld(sx, sy);
     const z = Math.max(this.minZoom(), Math.min(MAX_ZOOM, this.zoom * factor));
     this.zoom = z;
