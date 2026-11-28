@@ -7,12 +7,22 @@ import { WORLD_W, WORLD_H, CELL, GW, GH } from '../config.js';
 import { SOIL, AIR, ROCK, WOOD, LITTER, SAND, LOAM, CLAY_LOAM, CLAY } from '../soilTypes.js';
 import { makeRng, subSeed } from '../rng.js';
 
+// The world is painted at twice its unit resolution, so it stays sharp when
+// zoomed in. Every world-sized canvas is drawn with explicit world size.
+const BAKE = 2;
+
+function worldCanvas() {
+  const c = document.createElement('canvas');
+  c.width = WORLD_W * BAKE;
+  c.height = WORLD_H * BAKE;
+  const ctx = c.getContext('2d');
+  ctx.setTransform(BAKE, 0, 0, BAKE, 0, 0);
+  return [c, ctx];
+}
+
 export function bakeWorld(w, assets = {}) {
   const rng = makeRng(subSeed(w.seed, 'paint'));
-  const c = document.createElement('canvas');
-  c.width = WORLD_W;
-  c.height = WORLD_H;
-  const ctx = c.getContext('2d');
+  const [c, ctx] = worldCanvas();
   const typeAt = (wx, wy) => {
     const x = Math.min(GW - 1, Math.max(0, Math.floor(wx / CELL)));
     const y = Math.min(GH - 1, Math.max(0, Math.floor(wy / CELL)));
@@ -48,10 +58,7 @@ export function bakeWorld(w, assets = {}) {
 
   // Food goes on its own layer, so it can bleach and crumble away as the
   // fungus eats it.
-  const wood = document.createElement('canvas');
-  wood.width = WORLD_W;
-  wood.height = WORLD_H;
-  const wctx = wood.getContext('2d');
+  const [wood, wctx] = worldCanvas();
   for (const f of w.foods) if (f.kind === 'branch') paintBranch(wctx, rng, f, assets);
   for (const f of w.foods) if (f.kind === 'log') paintLog(wctx, rng, f, assets);
   const leaves = pileLeaves(rng, w, typeAt);
@@ -64,17 +71,15 @@ export class FoodLayer {
   constructor(wood, leaves) {
     this.wood = wood;
     this.leaves = leaves;
-    this.canvas = document.createElement('canvas');
-    this.canvas.width = WORLD_W;
-    this.canvas.height = WORLD_H;
+    [this.canvas, this.ctx] = worldCanvas();
     this.render(null, null, null);
   }
 
   // eaten: per-cell 0..255; holes/bleach: grid-size canvases (or null).
   render(eaten, holes, bleach, crumble) {
-    const c = this.canvas.getContext('2d');
+    const c = this.ctx;
     c.globalCompositeOperation = 'copy';
-    c.drawImage(this.wood, 0, 0);
+    c.drawImage(this.wood, 0, 0, WORLD_W, WORLD_H);
     c.globalCompositeOperation = 'source-over';
     if (holes) {
       c.globalCompositeOperation = 'destination-out';
@@ -182,10 +187,7 @@ function paintSoilTextures(ctx, w, assets) {
     { types: [SAND], img: assets.gravel, scale: 0.26, alpha: 0.7, tint: 'rgba(170,150,130,0.6)' },
   ];
   let any = false;
-  const tmp = document.createElement('canvas');
-  tmp.width = WORLD_W;
-  tmp.height = WORLD_H;
-  const t = tmp.getContext('2d');
+  const [tmp, t] = worldCanvas();
   for (const p of plan) {
     if (!p.img) continue;
     any = true;
@@ -221,7 +223,7 @@ function paintSoilTextures(ctx, w, assets) {
     t.drawImage(typeMask(w, p.types), 0, 0, WORLD_W, WORLD_H);
     t.globalCompositeOperation = 'source-over';
     ctx.globalAlpha = p.alpha;
-    ctx.drawImage(tmp, 0, 0);
+    ctx.drawImage(tmp, 0, 0, WORLD_W, WORLD_H);
     ctx.globalAlpha = 1;
   }
   return any;

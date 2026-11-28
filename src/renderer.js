@@ -64,8 +64,8 @@ export class Renderer {
     ctx.imageSmoothingEnabled = true;
 
     if (!this.base) return;
-    ctx.drawImage(this.base, 0, 0);
-    ctx.drawImage(this.foodLayer.canvas, 0, 0);
+    ctx.drawImage(this.base, 0, 0, WORLD_W, WORLD_H);
+    ctx.drawImage(this.foodLayer.canvas, 0, 0, WORLD_W, WORLD_H);
 
     if (this.resourceView) {
       ctx.fillStyle = 'rgba(8,6,4,0.8)';

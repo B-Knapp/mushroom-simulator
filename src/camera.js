@@ -3,7 +3,7 @@
 
 import { WORLD_W, WORLD_H } from './config.js';
 
-const MAX_ZOOM = 8;
+const MAX_ZOOM = 5;
 const MARGIN = 40; // screen px of slack allowed past the world edge
 
 export class Camera {

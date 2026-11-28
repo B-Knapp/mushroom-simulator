@@ -24,10 +24,10 @@ import { soilTemp } from './environment.js';
 const SEG = 6;               // world units per segment
 const BASE_SPEED = 3.4;      // units per simulated hour in ideal conditions
 const SEG_COST = 0.6;        // biomass per new segment
-const SPORE_RESERVE = 30;    // biomass a spore starts with
+const SPORE_RESERVE = 70;    // biomass a spore starts with
 const SENSE_DIST = 14;       // how far ahead a tip samples, units
 const TURN_STEPS = [-0.45, -0.22, 0, 0.22, 0.45];
-const BRANCH_BASE = 0.05;    // branch chance per segment in poor soil
+const BRANCH_BASE = 0.08;    // branch chance per segment in poor soil
 const BRANCH_RICH = 0.5;     // extra branch chance per unit of local nutrient
 const BRANCH_FOOD = 0.2;     // extra branch chance inside food
 const FED_BRANCH = 2;        // up to 3x branching when well fed and well supplied

@@ -23,11 +23,13 @@ import { HyphalMat } from './mat.js';
 const SEG = 6;
 const TIP_STRIDE = 8; // x, y, angle, progress, rate, idle, id, segment start
 const BUCKETS = [
-  { maxD: 0.75, w: 0.32, a: 0.42 },
-  { maxD: 0.95, w: 0.44, a: 0.5 },
-  { maxD: 1.2, w: 0.6, a: 0.58 },
-  { maxD: 1.5, w: 0.8, a: 0.66 },
-  { maxD: 1.9, w: 1.0, a: 0.74 },
+  // Young cords are barely more than a single hypha; only well-used ones
+  // become bright, thick ropes.
+  { maxD: 0.75, w: 0.2, a: 0.26 },
+  { maxD: 0.95, w: 0.28, a: 0.34 },
+  { maxD: 1.2, w: 0.45, a: 0.46 },
+  { maxD: 1.5, w: 0.7, a: 0.6 },
+  { maxD: 1.9, w: 1.0, a: 0.72 },
   { maxD: 2.4, w: 1.3, a: 0.8 },
   { maxD: 3.0, w: 1.6, a: 0.86 },
   { maxD: 3.5, w: 1.95, a: 0.9 },
@@ -119,6 +121,17 @@ export class NetworkView {
       motes[k * 6 + 5] = hash01(e * 7919 + (segs[e * 4] | 0));
     }
 
+    // Each cord meanders: its middle is pushed sideways by a fixed amount
+    // (from its position, so it stays put between updates).
+    const mid = new Float32Array(n * 2);
+    for (let e = 0; e < n; e++) {
+      const ax = segs[e * 4], ay = segs[e * 4 + 1], bx = segs[e * 4 + 2], by = segs[e * 4 + 3];
+      const len = Math.hypot(bx - ax, by - ay) || 1;
+      const off = (hash01(((ax * 7) | 0) * 92821 + ((ay * 7) | 0) * 68917 + ((bx * 7) | 0)) - 0.5) * Math.min(3.2, len * 0.55);
+      mid[e * 2] = (ax + bx) / 2 - (by - ay) / len * off;
+      mid[e * 2 + 1] = (ay + by) / 2 + (bx - ax) / len * off;
+    }
+    this.mid = mid;
     this.segs = segs;
     this.bucket = bucket;
     this.joints = buildJoints(x.length, a, b, n);
@@ -144,7 +157,8 @@ export class NetworkView {
     this.phase += dt * (speed > 0 ? 0.35 * Math.pow(speed, 0.3) : 0.05);
     this.tickClock(state, now, dt, speed);
     this.growMat();
-    if (!resourceView) this.mat.draw(ctx);
+    this.mat.grow(speed > 0 ? dt : 0);
+    if (!resourceView) { this.mat.draw(ctx); this.mat.drawGrowing(ctx); }
 
     if (this.edgeCount > 0) {
       const W = ctx.canvas.width, H = ctx.canvas.height;
@@ -198,7 +212,7 @@ export class NetworkView {
     const t1 = this.t1, list = [];
     for (let e = 0; e < this.edgeCount; e++) if (t1[e] > this.matT && t1[e] <= T) list.push(e);
     this.matT = T;
-    this.mat.deposit(list, this.segs, this.D);
+    this.mat.deposit(list, this.segs, this.D, this.mid);
     this.mat.age(this.simT);
   }
 
@@ -237,7 +251,9 @@ export class NetworkView {
       this.liveCount++;
       const ax = sg[e * 4], ay = sg[e * 4 + 1];
       let bx = sg[e * 4 + 2], by = sg[e * 4 + 3];
+      let through = true;
       if (t1[e] > T) {
+        through = false;
         const u = t1[e] > t0[e] ? (T - t0[e]) / (t1[e] - t0[e]) : 1;
         bx = ax + (bx - ax) * u; by = ay + (by - ay) * u;
         if (own[e] > 0) this.fronts.set(own[e], [bx, by, Math.atan2(sg[e * 4 + 3] - ay, sg[e * 4 + 2] - ax)]);
@@ -246,6 +262,7 @@ export class NetworkView {
       if (!paths) paths = BUCKETS.map(() => null);
       const p = paths[bk[e]] || (paths[bk[e]] = new Path2D());
       p.moveTo(ax, ay);
+      if (through) p.lineTo(this.mid[e * 2], this.mid[e * 2 + 1]);
       p.lineTo(bx, by);
     }
     if (!paths) return;
@@ -335,7 +352,8 @@ export class NetworkView {
     // through the node, so cords bend instead of zigzagging.
     const J = this.joints;
     const done = (e) => !t1 || t1[e] <= T;
-    const mid = (e, k) => (sg[e * 4 + k] + sg[e * 4 + k + 2]) / 2;
+    const MID = this.mid;
+    const mid = (e, k) => MID[e * 2 + k];
     for (let j = 0; j < J.length; j += 3) {
       const v = J[j], e1 = J[j + 1], e2 = J[j + 2];
       const vx = this.nodeX[v], vy = this.nodeY[v];
@@ -388,7 +406,7 @@ export class NetworkView {
     for (let k = 0; k < BUCKETS.length; k++) {
       const b = BUCKETS[k];
       c.strokeStyle = `rgba(242,234,218,${b.a * 0.9})`;
-      c.lineWidth = Math.max(b.w * 0.85, (0.4 + 0.07 * k) / cam.zoom);
+      c.lineWidth = Math.max(b.w * 0.85, (0.3 + 0.07 * k) / cam.zoom);
       c.stroke(paths[k]);
     }
     this.dirty = false;
@@ -464,33 +482,35 @@ export class NetworkView {
       if (ex < vx0 || ex > vx1 || ey < vy0 || ey > vy1) continue;
       if (show === 1) { stem.moveTo(P[k], P[k + 1]); stem.lineTo(ex, ey); }
       if (P[k + 6]) continue; // long-idle tips keep their stem but lose the fan
-      // Fan shape follows the tip, so it doesn't reshuffle as the tip grows.
+      // A loose fringe of wavy hyphae leading the tip: uneven in number,
+      // length and direction. Shape is fixed per tip so it doesn't reshuffle.
       let h = Math.imul(t[i + 6] + 1, 0x9e3779b1) >>> 0;
-      for (let f = 0; f < 34; f++) {
-        h = Math.imul(h ^ (h >>> 13), 0x5bd1e995) >>> 0;
-        const spread = ((h & 1023) / 1023 - 0.5) * 2.4;
-        const q = ((h >>> 10) & 63) / 63;
-        // Longest straight ahead, shorter to the sides: a rounded fan.
-        const len = (4 + q * 20) * (1 - 0.45 * Math.abs(spread) / 1.2);
-        const bend = (((h >>> 16) & 255) / 255 - 0.5) * 0.9;
-        const a1 = ang + spread, a2 = a1 + bend;
-        const p = fans[f & 1];
-        // Hairs leave from along the last stretch of the tip, not one point.
-        const back = (((h >>> 24) & 255) / 255) * 7;
-        const ox = ex - Math.cos(ang) * back, oy = ey - Math.sin(ang) * back;
-        p.moveTo(ox, oy);
-        p.quadraticCurveTo(ox + Math.cos(a1) * len * 0.55, oy + Math.sin(a1) * len * 0.55,
-          ox + Math.cos(a2) * len, oy + Math.sin(a2) * len);
+      const rnd = () => ((h = Math.imul(h ^ (h >>> 13), 0x5bd1e995) >>> 0) / 4294967296);
+      const count = 5 + Math.floor(rnd() * 7);
+      const skew = (rnd() - 0.5) * 0.8;
+      for (let f = 0; f < count; f++) {
+        let a = ang + skew + (rnd() - 0.5) * 2.2;
+        const len = 3 + Math.pow(rnd(), 1.6) * 18;
+        const back = rnd() * 8;
+        let x = ex - Math.cos(ang) * back, y = ey - Math.sin(ang) * back;
+        const p = fans[rnd() < 0.4 ? 0 : 1];
+        p.moveTo(x, y);
+        for (let s = 0; s < 3; s++) {
+          a += (rnd() - 0.5) * 0.8;
+          x += Math.cos(a) * len / 3; y += Math.sin(a) * len / 3;
+          p.lineTo(x, y);
+        }
       }
     }
     ctx.lineCap = 'round';
-    ctx.strokeStyle = 'rgba(248,244,236,0.6)';
-    ctx.lineWidth = Math.max(0.35, 0.6 / z);
+    ctx.lineJoin = 'round';
+    ctx.strokeStyle = 'rgba(248,244,236,0.45)';
+    ctx.lineWidth = Math.max(0.3, 0.45 / z);
     ctx.stroke(stem);
-    ctx.lineWidth = Math.max(0.16, 0.35 / z);
-    ctx.strokeStyle = 'rgba(248,244,236,0.22)';
+    ctx.lineWidth = Math.max(0.16, 0.32 / z);
+    ctx.strokeStyle = 'rgba(248,244,236,0.26)';
     ctx.stroke(fans[0]);
-    ctx.strokeStyle = 'rgba(248,244,236,0.11)';
+    ctx.strokeStyle = 'rgba(248,244,236,0.14)';
     ctx.stroke(fans[1]);
   }
 
